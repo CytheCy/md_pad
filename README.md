@@ -1,0 +1,78 @@
+# Pad
+
+A small native notepad for Markdown and plain text, designed for Fedora KDE.
+
+## Install on Fedora KDE
+
+```bash
+bash install.sh
+```
+
+The installer creates a local virtual environment and adds Pad to the KDE application menu. It also registers it as an option for `.md` and `.txt` files. To run directly from this checkout instead:
+
+```bash
+python3 main.py [note.md]
+```
+
+Use **File → Open…** to open a note, or drag a file onto the editor. Markdown source stays directly editable while headings, emphasis, code, links, lists, and quotes receive visual styling. Heading `#` markers stay hidden until you click or move the cursor onto that line, and hide again when you leave it.
+
+Use **File → Open Recent** to reopen one of your last 10 opened or saved files. The list is remembered across restarts; **Clear Recent** clears it.
+
+Markdown notes with two or more `#` headings automatically open a heading panel on the right. Click a heading to jump to it in the editor. Drag the divider between the editor and the heading panel to adjust their widths. The side panel icon immediately left of Minimize closes or reopens the panel; it only appears when there are at least two headings. The list updates as you edit and excludes fenced code. Plain text files do not show the panel.
+
+Spell checking is enabled by default and works offline with an English dictionary.
+Misspelled words receive a wavy underline; right-click one for suggestions,
+**Ignore for this session**, or **Add to dictionary**. Added words are remembered
+across restarts. Corrections can be undone with Ctrl+Z. Markdown code, link
+destinations, URLs, and email addresses are skipped. Toggle checking with
+**Settings → Spell check (English)**; this preference is also remembered.
+Existing installations should rerun `bash install.sh` to install the new dependency.
+
+Use **File → Remove Extra ↵** to collapse consecutive line breaks into a single line break throughout the note. Undo restores the removed breaks in one step.
+
+Use **File → Remove Extra Spaces** to collapse repeated spaces into one and remove spaces immediately before or after a newline throughout the note. Line breaks and tabs are preserved. Undo restores the removed spaces in one step.
+
+Each newline displays as a paragraph break with extra space after it. Adjust the gap in **Settings → Paragraph spacing…**. This changes the display only; saved files keep their original newlines.
+
+Use **Settings → Font size…** to choose a text size from 6 to 72 points. **Ctrl++** (or **Ctrl+=**) increases the size by one point; **Ctrl+-** decreases it. Markdown headings scale with the text. Font size, paragraph spacing, and page width are remembered across restarts.
+
+Use **Settings → Max Page Width…** to limit the text page width in pixels (950 px by default). Wider windows add margins on both sides to keep the page centered; narrower windows wrap the text to fit. The setting is remembered across restarts. Set it to **Unlimited** (0) to use the full available width.
+
+Use `Ctrl+N` for a new note, `Ctrl+O` to open a file, `Ctrl+S` to save, and `Ctrl+Shift+S` to save as. Unsaved changes are confirmed before closing or changing files.
+
+## Appearance
+
+Choose **Settings → Themes…** for **Catppuccin Mocha**, **Tokyo Night**,
+or **Everforest Dark**. Each option has a miniature color preview and a radio
+indicator. Changes apply immediately and save automatically. **System** retains
+the previous light/dark appearance based on desktop colors at launch and remains
+the default for existing installations.
+
+Themes preserve the document, undo history, cursor, selection, scrolling, and
+all typography preferences. Saved colors are applied before the main window is
+shown. Qt widget file dialogs are used so open/save dialogs share the palette;
+OS-owned window decorations and file-type icons remain platform controlled.
+
+`themes.py` owns stable identifiers, immutable semantic color maps, the Qt
+palette, and application stylesheets. `main.py` uses the same tokens for source
+Markdown highlighting and the theme selector. Ordinary prose stays in the body
+color; headings, lists, quotes, code, and links receive restrained accents. The
+editor remains a source editor: there is no rendered preview, search UI,
+tab system, or YAML-specific highlighter. Tokens for these roles are available
+without adding those features.
+
+## Validation
+
+Install `requirements.txt` first; no additional test dependencies are needed:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
+python3 -m py_compile main.py themes.py spelling.py
+```
+
+Tests cover token completeness, text contrast, live selection, persistence in a
+new process, fallback behavior, source highlighting (including Unicode offsets),
+plain text mode, document/undo/selection/scroll preservation, typography, and
+BOM/line-ending preservation when saving. Offscreen screenshots of the three
+themes and their dialogs are in `artifacts/`. A real KDE session is still needed
+to assess compositor decorations and native desktop interaction.

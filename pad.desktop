@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pad
+Comment=Edit Markdown and text notes
+Exec=pad %f
+Icon=md-pad
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;
