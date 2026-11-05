@@ -1,0 +1,15 @@
+# Pad v1.0.0
+
+First release of Pad, a native Markdown and plain text notepad for Fedora KDE.
+
+- Editable Markdown source with syntax styling and a heading navigation panel.
+- Offline English spell checking, suggestions, and a personal dictionary.
+- Three built-in themes plus system colors.
+- Configurable font size, paragraph spacing, and page width.
+- Recent files, drag-and-drop opening, and whitespace cleanup actions.
+- Fedora RPM installer with an application menu entry and file associations.
+
+Download the `.noarch.rpm` asset and install it with
+`sudo dnf install ./md-pad-1.0.0-1.fc44.noarch.rpm`.
+DNF installs the required Qt/Python libraries and spelling dictionary.
+The `.src.rpm` asset is for rebuilding the package, not installing the app.

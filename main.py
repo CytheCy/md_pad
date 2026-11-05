@@ -911,6 +911,8 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="A native Markdown and text notepad")
+    parser.add_argument("--version", action="version",
+                        version=f"Pad {Path(__file__).with_name('VERSION').read_text().strip()}")
     parser.add_argument("file", nargs="?", type=Path, help="note to open")
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])

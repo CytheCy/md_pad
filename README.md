@@ -4,6 +4,25 @@ A small native notepad for Markdown and plain text, designed for Fedora KDE.
 
 ## Install on Fedora KDE
 
+Download the `.noarch.rpm` from the [latest release](https://github.com/CytheCy/md_pad/releases/latest), then install it on Fedora 44:
+
+```bash
+sudo dnf install ./md-pad-1.0.0-1.fc44.noarch.rpm
+```
+
+DNF installs the required dependencies. Launch **Pad** from the application menu
+or run `pad [note.md]`. Check the version with `pad --version`.
+Remove the RPM with `sudo dnf remove md-pad`.
+
+If you previously used `install.sh`, its per-user launcher and desktop entry
+take precedence over the RPM. Remove those generated files when switching:
+
+```bash
+rm -f ~/.local/bin/pad ~/.local/share/applications/pad.desktop
+```
+
+### Install from source
+
 ```bash
 bash install.sh
 ```
@@ -76,3 +95,28 @@ plain text mode, document/undo/selection/scroll preservation, typography, and
 BOM/line-ending preservation when saving. Offscreen screenshots of the three
 themes and their dialogs are in `artifacts/`. A real KDE session is still needed
 to assess compositor decorations and native desktop interaction.
+
+## Building and releasing an RPM
+
+GitHub Actions builds and tests an RPM on pushes to `main`, pull requests, and
+manual runs. Pushing a `v*` tag also publishes a GitHub release with the binary
+RPM, source RPM, and SHA-256 checksums. The tag must match `VERSION` and the
+version in `packaging/md-pad.spec`. No additional GitHub secrets are needed.
+
+To build and test locally with Podman:
+
+```bash
+podman run --rm -v "$PWD:/src:Z" -w /src \
+  registry.fedoraproject.org/fedora:44 bash packaging/ci.sh
+```
+
+Output is written to `dist/`. For a future release, update `VERSION`, the spec
+version/changelog, and `CHANGELOG.md`, commit, then push the commit and its tag:
+
+```bash
+git tag -a v1.0.1 -m "Pad v1.0.1"
+git push --atomic origin main v1.0.1
+```
+
+The project has not declared a license; RPM metadata records this as
+`LicenseRef-Not-Specified` without granting additional rights.
