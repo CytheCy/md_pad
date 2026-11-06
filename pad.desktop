@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Pad
+Name=MDPad
 Comment=Edit Markdown and text notes
 Exec=pad %f
 Icon=md-pad

@@ -48,5 +48,5 @@ jobs:
             gh release upload "$RELEASE_TAG" dist/* --clobber
           else
             gh release create "$RELEASE_TAG" dist/* --verify-tag \
-              --title "Pad $RELEASE_TAG" --notes-file CHANGELOG.md
+              --title "MDPad $RELEASE_TAG" --notes-file CHANGELOG.md
           fi

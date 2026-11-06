@@ -1,6 +1,6 @@
-# Pad v1.0.0
+# MDPad v1.0.0
 
-First release of Pad, a native Markdown and plain text notepad for Fedora KDE.
+First release of MDPad, a native Markdown and plain text notepad for Fedora KDE.
 
 - Editable Markdown source with syntax styling and a heading navigation panel.
 - Offline English spell checking, suggestions, and a personal dictionary.

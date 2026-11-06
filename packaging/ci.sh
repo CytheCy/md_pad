@@ -5,7 +5,7 @@ dnf install -y rpm-build python3-devel python3-pyside6 python3-pyspellchecker \
     desktop-file-utils tar gzip
 bash packaging/build-rpm.sh
 dnf install -y dist/*.noarch.rpm
-test "$(pad --version)" = "Pad $(cat VERSION)"
+test "$(pad --version)" = "MDPad $(cat VERSION)"
 cd /tmp
 QT_QPA_PLATFORM=offscreen python3 - <<'PY'
 import sys

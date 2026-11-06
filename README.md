@@ -1,4 +1,4 @@
-# Pad
+# MDPad
 
 A small native notepad for Markdown and plain text, designed for Fedora KDE.
 
@@ -10,7 +10,7 @@ Download the `.noarch.rpm` from the [latest release](https://github.com/CytheCy/
 sudo dnf install ./md-pad-1.0.0-1.fc44.noarch.rpm
 ```
 
-DNF installs the required dependencies. Launch **Pad** from the application menu
+DNF installs the required dependencies. Launch **MDPad** from the application menu
 or run `pad [note.md]`. Check the version with `pad --version`.
 Remove the RPM with `sudo dnf remove md-pad`.
 
@@ -27,7 +27,7 @@ rm -f ~/.local/bin/pad ~/.local/share/applications/pad.desktop
 bash install.sh
 ```
 
-The installer creates a local virtual environment and adds Pad to the KDE application menu. It also registers it as an option for `.md` and `.txt` files. To run directly from this checkout instead:
+The installer creates a local virtual environment and adds MDPad to the KDE application menu. It also registers it as an option for `.md` and `.txt` files. To run directly from this checkout instead:
 
 ```bash
 python3 main.py [note.md]
@@ -45,7 +45,7 @@ Single backticks wrap inline code, and triple backticks on separate lines fence 
 
 Use **File → Open Recent** to reopen one of your last 10 opened or saved files. The list is remembered across restarts; **Clear Recent** clears it.
 
-Markdown notes with two or more `#` headings automatically open a heading panel on the right. Click a heading to jump to it in the editor. Drag the divider between the editor and the heading panel to adjust their widths. The side panel icon immediately left of Minimize closes or reopens the panel; it only appears when there are at least two headings. The list updates as you edit and excludes fenced code. Plain text files do not show the panel.
+Markdown notes with two or more `#` headings show a heading panel on the right. Click the side panel icon immediately left of Minimize to cycle through **Narrow**, **Full**, and **Closed**. Narrow shows the first three characters of each heading; Full shows more of each heading and lets you drag the divider to adjust its width. Choose a state directly from **Settings → Heading panel**. The state and Full width are remembered across restarts. Click a heading to jump to it in the editor. The icon appears only when there are at least two headings. The list updates as you edit and excludes fenced code. Plain text files do not show the panel.
 
 Spell checking is enabled by default and works offline with an English dictionary.
 Misspelled words receive a wavy underline; right-click one for suggestions,
@@ -122,7 +122,7 @@ Output is written to `dist/`. For a future release, update `VERSION`, the spec
 version/changelog, and `CHANGELOG.md`, commit, then push the commit and its tag:
 
 ```bash
-git tag -a v1.0.1 -m "Pad v1.0.1"
+git tag -a v1.0.1 -m "MDPad v1.0.1"
 git push --atomic origin main v1.0.1
 ```
 

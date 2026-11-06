@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pad: a small native editor for Markdown and plain text."""
+"""MDPad: a small native editor for Markdown and plain text."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QRectF, QSaveFile, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QColor,
     QClipboard,
     QFont,
@@ -24,6 +25,7 @@ from PySide6.QtGui import (
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
     QTextFormat,
     QSyntaxHighlighter,
 )
@@ -38,6 +40,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -58,7 +61,7 @@ from themes import (THEMES, apply_application_theme, resolve_theme, saved_theme_
 from spelling import Spelling
 
 
-APP_NAME = "Pad"
+APP_NAME = "MDPad"
 FILE_FILTER = "Notes (*.md *.markdown *.txt);;Markdown (*.md *.markdown);;Text (*.txt);;All files (*)"
 MAX_RECENT_FILES = 10
 DEFAULT_FONT_SIZE = 12
@@ -271,6 +274,7 @@ class NoteEditor(QTextEdit):
         self.max_page_width = 0
         self._spelling_selections = []
         self._code_selections = []
+        self._find_selections = []
         self.code_panels = []
         self._copy_pressed_panel = None
         self._hovered_code_panel = None
@@ -291,7 +295,11 @@ class NoteEditor(QTextEdit):
 
     def setExtraSelections(self, selections):  # noqa: N802 (Qt API)
         self._spelling_selections = list(selections)
-        super().setExtraSelections(self._code_selections + self._spelling_selections)
+        self.refresh_extra_selections()
+
+    def refresh_extra_selections(self):
+        super().setExtraSelections(
+            self._code_selections + self._find_selections + self._spelling_selections)
 
     def extraSelections(self):  # noqa: N802 (Qt API)
         return self._spelling_selections
@@ -328,7 +336,7 @@ class NoteEditor(QTextEdit):
                         self.code_panels.append((opening.position(), block.position()))
                         opening = None
                 block = block.next()
-        super().setExtraSelections(self._code_selections + self._spelling_selections)
+        self.refresh_extra_selections()
         if highlighter is not None:
             was_modified = self.document().isModified()
             highlighter.sync_active_code_panel()
@@ -580,7 +588,9 @@ class BoxIconButton(QToolButton):
         super().paintEvent(event)
         painter = QPainter(self)
         theme = self.window().theme
-        color = theme['window'] if self.objectName() == "closeControl" and self.underMouse() else theme['text']
+        color = (theme['disabled'] if not self.isEnabled() else
+                 theme['window'] if self.objectName() == "closeControl" and self.underMouse() else
+                 theme['text'])
         if self.icon_name == "sidebar":
             painter.translate(self.width(), 0)
             painter.scale(-1, 1)
@@ -670,13 +680,14 @@ class MainWindow(QMainWindow):
         self.content_splitter.addWidget(self.editor)
         self.heading_panel = QWidget()
         self.heading_panel.setObjectName("headingPanel")
-        self.heading_panel.setMinimumWidth(140)
+        self.heading_panel.setMinimumWidth(1)
         panel_layout = QVBoxLayout(self.heading_panel)
         panel_layout.setContentsMargins(12, 16, 12, 12)
         self.heading_list = QListWidget()
         self.heading_list.setObjectName("headingList")
         self.heading_list.setAccessibleName("Document headings")
         self.heading_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.heading_list.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.heading_list.itemClicked.connect(self.go_to_heading)
         self.heading_list.itemActivated.connect(self.go_to_heading)
         panel_layout.addWidget(self.heading_list)
@@ -684,13 +695,138 @@ class MainWindow(QMainWindow):
         self.content_splitter.setStretchFactor(0, 1)
         self.content_splitter.setStretchFactor(1, 0)
         self.content_splitter.resize(self.width(), self.height())
-        panel_width = max(140, self.settings.value("heading_panel_width", 240, type=int))
-        self.content_splitter.setSizes([self.width() - panel_width - 6, panel_width])
+        self.heading_panel_expanded_width = max(140, self.settings.value("heading_panel_width", 240, type=int))
+        self.heading_panel_state = self.settings.value("heading_panel_state", "narrow")
+        if self.heading_panel_state not in ("narrow", "full", "closed"):
+            self.heading_panel_state = "narrow"
+        self._resizing_heading_panel = False
+        self.content_splitter.setSizes([self.width() - self.heading_panel_expanded_width - 6,
+                                        self.heading_panel_expanded_width])
         self.content_splitter.handle(1).setToolTip("Drag to resize the headings panel")
+        self.content_splitter.handle(1).setEnabled(self.heading_panel_state == "full")
         root_layout.addWidget(self.content_splitter, 1)
         self.heading_panel.hide()
         self.content_splitter.splitterMoved.connect(self.remember_heading_panel_width)
         self.headings = []
+
+        self.find_footer = QWidget()
+        self.find_footer.setObjectName("findFooter")
+        find_layout = QHBoxLayout(self.find_footer)
+        find_layout.setContentsMargins(18, 7, 18, 7)
+        find_layout.setSpacing(8)
+        self.find_input = QLineEdit()
+        self.find_input.setPlaceholderText("Search text")
+        self.find_input.setAccessibleName("Find text")
+        self.find_input.setClearButtonEnabled(True)
+        self.find_input.setMaximumWidth(360)
+        self.find_input.textChanged.connect(self.update_find_matches)
+        self.find_input.returnPressed.connect(lambda: self.move_find_match(1))
+        self.find_input.installEventFilter(self)
+        find_layout.addWidget(self.find_input, 1)
+        self.find_match_case = QToolButton()
+        self.find_match_case.setText("Aa")
+        self.find_match_case.setCheckable(True)
+        self.find_match_case.setToolTip("Match case")
+        self.find_match_case.setAccessibleName("Match case")
+        self.find_match_case.toggled.connect(self.update_find_matches)
+        find_layout.addWidget(self.find_match_case)
+        self.find_whole_word = QToolButton()
+        self.find_whole_word.setText("|ab|")
+        self.find_whole_word.setCheckable(True)
+        self.find_whole_word.setToolTip("Match whole word")
+        self.find_whole_word.setAccessibleName("Match whole word")
+        self.find_whole_word.toggled.connect(self.update_find_matches)
+        find_layout.addWidget(self.find_whole_word)
+        self.find_count = QLabel("0 matches")
+        self.find_count.setObjectName("findCount")
+        find_layout.addWidget(self.find_count)
+        self.find_previous = BoxIconButton("up-arrow-alt")
+        self.find_previous.setToolTip("Previous match")
+        self.find_previous.setAccessibleName("Previous match")
+        self.find_previous.clicked.connect(lambda: self.move_find_match(-1))
+        find_layout.addWidget(self.find_previous)
+        self.find_next = BoxIconButton("down-arrow-alt")
+        self.find_next.setToolTip("Next match")
+        self.find_next.setAccessibleName("Next match")
+        self.find_next.clicked.connect(lambda: self.move_find_match(1))
+        find_layout.addWidget(self.find_next)
+        close_find = BoxIconButton("x")
+        close_find.setToolTip("Close Find")
+        close_find.setAccessibleName("Close Find")
+        close_find.clicked.connect(self.close_find)
+        find_layout.addWidget(close_find)
+        root_layout.addWidget(self.find_footer)
+        self.find_footer.hide()
+
+        self.replace_footer = QWidget()
+        self.replace_footer.setObjectName("replaceFooter")
+        replace_layout = QHBoxLayout(self.replace_footer)
+        replace_layout.setContentsMargins(10, 7, 10, 7)
+        replace_layout.setSpacing(4)
+        self.replace_search_input = QLineEdit()
+        self.replace_search_input.setPlaceholderText("Search text")
+        self.replace_search_input.setAccessibleName("Replace search text")
+        self.replace_search_input.setClearButtonEnabled(True)
+        self.replace_search_input.setMaximumWidth(360)
+        self.replace_search_input.setMinimumWidth(80)
+        self.replace_search_input.textChanged.connect(self.update_find_matches)
+        self.replace_search_input.returnPressed.connect(lambda: self.move_find_match(1))
+        self.replace_search_input.installEventFilter(self)
+        replace_layout.addWidget(self.replace_search_input, 1)
+        self.replace_match_case = QToolButton()
+        self.replace_match_case.setText("Aa")
+        self.replace_match_case.setCheckable(True)
+        self.replace_match_case.setToolTip("Match case")
+        self.replace_match_case.setAccessibleName("Replace match case")
+        self.replace_match_case.toggled.connect(self.update_find_matches)
+        replace_layout.addWidget(self.replace_match_case)
+        self.replace_whole_word = QToolButton()
+        self.replace_whole_word.setText("|ab|")
+        self.replace_whole_word.setCheckable(True)
+        self.replace_whole_word.setToolTip("Match whole word")
+        self.replace_whole_word.setAccessibleName("Replace match whole word")
+        self.replace_whole_word.toggled.connect(self.update_find_matches)
+        replace_layout.addWidget(self.replace_whole_word)
+        self.replace_count = QLabel("0 matches")
+        self.replace_count.setObjectName("replaceCount")
+        replace_layout.addWidget(self.replace_count)
+        self.replace_previous = BoxIconButton("up-arrow-alt")
+        self.replace_previous.setToolTip("Previous match")
+        self.replace_previous.setAccessibleName("Previous match")
+        self.replace_previous.clicked.connect(lambda: self.move_find_match(-1))
+        replace_layout.addWidget(self.replace_previous)
+        self.replace_next = BoxIconButton("down-arrow-alt")
+        self.replace_next.setToolTip("Next match")
+        self.replace_next.setAccessibleName("Next match")
+        self.replace_next.clicked.connect(lambda: self.move_find_match(1))
+        replace_layout.addWidget(self.replace_next)
+        self.replace_input = QLineEdit()
+        self.replace_input.setPlaceholderText("Replacement text")
+        self.replace_input.setAccessibleName("Replacement text")
+        self.replace_input.setClearButtonEnabled(True)
+        self.replace_input.setMaximumWidth(360)
+        self.replace_input.setMinimumWidth(80)
+        self.replace_input.installEventFilter(self)
+        replace_layout.addWidget(self.replace_input, 1)
+        self.replace_next_button = BoxIconButton("right-arrow-alt")
+        self.replace_next_button.setToolTip("Replace current match")
+        self.replace_next_button.setAccessibleName("Replace current match")
+        self.replace_next_button.clicked.connect(self.replace_current_match)
+        replace_layout.addWidget(self.replace_next_button)
+        self.replace_all_button = BoxIconButton("chevrons-right")
+        self.replace_all_button.setToolTip("Replace all matches")
+        self.replace_all_button.setAccessibleName("Replace all matches")
+        self.replace_all_button.clicked.connect(self.replace_all_matches)
+        replace_layout.addWidget(self.replace_all_button)
+        close_replace = BoxIconButton("x")
+        close_replace.setToolTip("Close Replace")
+        close_replace.setAccessibleName("Close Replace")
+        close_replace.clicked.connect(self.close_replace)
+        replace_layout.addWidget(close_replace)
+        root_layout.addWidget(self.replace_footer)
+        self.replace_footer.hide()
+        self.find_matches = []
+        self.find_index = -1
 
         status = QWidget()
         status.setObjectName("status")
@@ -707,6 +843,7 @@ class MainWindow(QMainWindow):
         self.setup_actions()
         QApplication.instance().installEventFilter(self)
         self.editor.textChanged.connect(self.on_text_changed)
+        self.editor.cursorPositionChanged.connect(self.update_find_position)
         self.editor.document().modificationChanged.connect(self.update_title)
         self.editor.files_dropped.connect(self.open_dropped)
         self.editor.document().setModified(False)
@@ -729,6 +866,7 @@ class MainWindow(QMainWindow):
             self.highlighter.update_colors(self.theme)
             self.editor.spelling.color = QColor(self.theme['error'])
             self.editor.spelling.refresh()
+            self.refresh_find_selections()
             self.editor.document().setModified(modified)
         finally:
             self.loading = was_loading
@@ -803,6 +941,17 @@ class MainWindow(QMainWindow):
                 self.recent_menu.aboutToShow.connect(self.update_recent_menu)
                 self.update_recent_menu()
         menu.addSeparator()
+        find_action = QAction("Find", self)
+        find_action.setShortcut(QKeySequence.StandardKey.Find)
+        find_action.triggered.connect(self.open_find)
+        menu.addAction(find_action)
+        self.addAction(find_action)
+        replace_action = QAction("Replace", self)
+        replace_action.setShortcut(QKeySequence("Ctrl+R"))
+        replace_action.triggered.connect(self.open_replace)
+        menu.addAction(replace_action)
+        self.addAction(replace_action)
+        menu.addSeparator()
         remove_extra_action = QAction("Remove Extra ↵", self)
         remove_extra_action.triggered.connect(self.remove_extra_newlines)
         menu.addAction(remove_extra_action)
@@ -844,6 +993,16 @@ class MainWindow(QMainWindow):
         width_action = QAction("Max Page Width…", self)
         width_action.triggered.connect(self.show_max_page_width)
         settings_menu.addAction(width_action)
+        panel_menu = settings_menu.addMenu("Heading panel")
+        self.heading_state_actions = {}
+        heading_state_group = QActionGroup(self)
+        for state, label in (("narrow", "Narrow"), ("full", "Full"), ("closed", "Closed")):
+            action = panel_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(state == self.heading_panel_state)
+            action.triggered.connect(lambda checked=False, selected=state: self.set_heading_panel_state(selected))
+            heading_state_group.addAction(action)
+            self.heading_state_actions[state] = action
         controls = QWidget(self.menuBar())
         controls_layout = QHBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -857,10 +1016,9 @@ class MainWindow(QMainWindow):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setAutoRaise(True)
             controls_layout.addWidget(button)
-        self.heading_button.setCheckable(True)
-        self.heading_button.setAccessibleName("Toggle heading panel")
-        self.heading_button.setToolTip("Show headings")
-        self.heading_button.toggled.connect(self.set_heading_panel_open)
+        self.heading_button.setAccessibleName("Cycle heading panel state")
+        self.heading_button.clicked.connect(self.cycle_heading_panel_state)
+        self.update_heading_button_tooltip()
         self.heading_button.hide()
         self.minimize_button.setToolTip("Minimize")
         self.maximize_button.setToolTip("Maximize")
@@ -877,13 +1035,53 @@ class MainWindow(QMainWindow):
         self.menuBar().title_label = self.title_label
         self.menuBar().position_title()
 
-    def set_heading_panel_open(self, opened):
-        self.heading_panel.setVisible(opened)
-        self.heading_button.setToolTip("Hide headings" if opened else "Show headings")
+    def cycle_heading_panel_state(self):
+        states = ("narrow", "full", "closed")
+        self.set_heading_panel_state(states[(states.index(self.heading_panel_state) + 1) % len(states)])
+
+    def update_heading_button_tooltip(self):
+        next_state = {"narrow": "Full", "full": "Closed", "closed": "Narrow"}[self.heading_panel_state]
+        self.heading_button.setToolTip(f"Heading panel: {self.heading_panel_state.title()} (click for {next_state})")
+
+    def set_heading_panel_state(self, state):
+        if state not in ("narrow", "full", "closed"):
+            raise ValueError(f"Unknown heading panel state: {state}")
+        self.heading_panel_state = state
+        self.settings.setValue("heading_panel_state", state)
+        self.heading_state_actions[state].setChecked(True)
+        self.update_heading_button_tooltip()
+        self.heading_panel.setVisible(state != "closed" and len(self.headings) > 1)
+        self.content_splitter.handle(1).setEnabled(state == "full")
+        self.update_heading_panel_display()
 
     def remember_heading_panel_width(self, _position, _index):
+        if self.heading_panel_state == "full" and self.heading_panel.isVisible() and not self._resizing_heading_panel:
+            self.heading_panel_expanded_width = self.content_splitter.sizes()[1]
+            self.settings.setValue("heading_panel_width", self.heading_panel_expanded_width)
+
+    def heading_panel_compact_width(self):
+        labels = [title[:3] for _, _, title in self.headings]
+        text_width = max((self.heading_list.fontMetrics().horizontalAdvance(label)
+                          for label in labels), default=0)
+        margins = self.heading_panel.layout().contentsMargins()
+        return (text_width + margins.left() + margins.right() + 8
+                + self.heading_list.verticalScrollBar().sizeHint().width())
+
+    def update_heading_panel_display(self):
+        expanded = self.heading_panel_state == "full"
+        for item, (_, level, title) in zip(
+                (self.heading_list.item(i) for i in range(self.heading_list.count())), self.headings):
+            item.setText("  " * (level - 1) + title if expanded else title[:3])
         if self.heading_panel.isVisible():
-            self.settings.setValue("heading_panel_width", self.content_splitter.sizes()[1])
+            width = self.heading_panel_expanded_width if expanded else self.heading_panel_compact_width()
+            self.resize_heading_panel(width)
+
+    def resize_heading_panel(self, width):
+        self._resizing_heading_panel = True
+        try:
+            self.content_splitter.setSizes([max(280, self.content_splitter.width() - int(width) - 6), int(width)])
+        finally:
+            self._resizing_heading_panel = False
 
     def update_headings(self, reset=False):
         headings = []
@@ -906,17 +1104,18 @@ class MainWindow(QMainWindow):
             scroll = self.heading_list.verticalScrollBar().value()
             self.heading_list.clear()
             for position, level, title in headings:
-                item = QListWidgetItem("  " * (level - 1) + title)
+                item = QListWidgetItem("  " * (level - 1) + title if self.heading_panel_state == "full" else title[:3])
                 item.setToolTip(title)
                 item.setData(Qt.ItemDataRole.UserRole, position)
                 self.heading_list.addItem(item)
             self.heading_list.verticalScrollBar().setValue(0 if reset else scroll)
             self.headings = headings
+            if available and self.heading_panel.isVisible() and not reset:
+                self.update_heading_panel_display()
         self.heading_button.setVisible(available)
-        if not available:
-            self.heading_button.setChecked(False)
-        elif reset or not was_available:
-            self.heading_button.setChecked(True)
+        self.heading_panel.setVisible(available and self.heading_panel_state != "closed")
+        if available and (reset or not was_available):
+            self.update_heading_panel_display()
         self.menuBar().position_title()
 
     def go_to_heading(self, item):
@@ -1065,6 +1264,17 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def eventFilter(self, watched, event):  # noqa: N802
+        if watched in (self.find_input, getattr(self, 'replace_search_input', None),
+                       getattr(self, 'replace_input', None)) \
+                and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.close_replace() if self.replace_footer.isVisible() else self.close_find()
+                return True
+            if (watched is not self.replace_input
+                    and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                    and event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                self.move_find_match(-1)
+                return True
         if (event.type() == QEvent.Type.MouseButtonDblClick
                 and event.button() == Qt.MouseButton.LeftButton
                 and watched is self.title_label):
@@ -1236,9 +1446,156 @@ class MainWindow(QMainWindow):
         return True
 
     def on_text_changed(self):
+        if self.find_footer.isVisible() or self.replace_footer.isVisible():
+            self.update_find_matches()
         if not self.loading:
             self.update_title()
             self.update_status()
+
+    def open_find(self):
+        if self.find_footer.isVisible():
+            self.close_find()
+            return
+        self.replace_footer.hide()
+        self.find_footer.show()
+        self.update_find_matches()
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+
+    def open_replace(self):
+        if self.replace_footer.isVisible():
+            self.close_replace()
+            return
+        self.find_footer.hide()
+        self.replace_footer.show()
+        self.update_find_matches()
+        self.replace_search_input.setFocus()
+        self.replace_search_input.selectAll()
+
+    def close_find(self):
+        self.find_footer.hide()
+        self.clear_search_highlights()
+
+    def close_replace(self):
+        self.replace_footer.hide()
+        self.clear_search_highlights()
+
+    def clear_search_highlights(self):
+        self.find_matches = []
+        self.find_index = -1
+        self.editor._find_selections = []
+        self.editor.refresh_extra_selections()
+        self.editor.setFocus()
+
+    def search_controls(self):
+        if self.replace_footer.isVisible():
+            return (self.replace_search_input, self.replace_match_case,
+                    self.replace_whole_word, self.replace_count,
+                    self.replace_previous, self.replace_next)
+        if self.find_footer.isVisible():
+            return (self.find_input, self.find_match_case, self.find_whole_word,
+                    self.find_count, self.find_previous, self.find_next)
+        return None
+
+    def update_find_matches(self):
+        self.find_matches = []
+        controls = self.search_controls()
+        query = controls[0].text() if controls else ""
+        if query:
+            document = self.editor.document()
+            flags = QTextDocument.FindFlag(0)
+            if controls[1].isChecked():
+                flags |= QTextDocument.FindFlag.FindCaseSensitively
+            if controls[2].isChecked():
+                flags |= QTextDocument.FindFlag.FindWholeWords
+            cursor = document.find(query, 0, flags)
+            while not cursor.isNull():
+                self.find_matches.append((cursor.selectionStart(), cursor.selectionEnd()))
+                cursor = document.find(query, cursor, flags)
+        position = self.editor.textCursor().position()
+        self.find_index = max((i for i, (start, _) in enumerate(self.find_matches)
+                               if start <= position), default=0) if self.find_matches else -1
+        self.refresh_find_selections()
+
+    def update_find_position(self):
+        if not self.search_controls() or not self.find_matches:
+            return
+        position = self.editor.textCursor().position()
+        index = max((i for i, (start, _) in enumerate(self.find_matches)
+                     if start <= position), default=0)
+        if index != self.find_index:
+            self.find_index = index
+            self.refresh_find_selections()
+
+    def refresh_find_selections(self):
+        selections = []
+        for index, (start, end) in enumerate(self.find_matches):
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(self.editor.document())
+            selection.cursor.setPosition(start)
+            selection.cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            color = QColor(self.theme['search_current'])
+            if index != self.find_index:
+                color.setAlpha(100)
+            selection.format.setBackground(color)
+            if index == self.find_index:
+                selection.format.setForeground(QColor(self.theme['search_text']))
+            selections.append(selection)
+        self.editor._find_selections = selections
+        self.editor.refresh_extra_selections()
+        total = len(self.find_matches)
+        controls = self.search_controls()
+        if controls:
+            controls[3].setText(f"{self.find_index + 1} of {total}" if total else "0 matches")
+            controls[4].setEnabled(bool(total))
+            controls[5].setEnabled(bool(total))
+        self.replace_next_button.setEnabled(bool(total))
+        self.replace_all_button.setEnabled(bool(total))
+
+    def move_find_match(self, direction):
+        if not self.find_matches:
+            return
+        self.find_index = (self.find_index + direction) % len(self.find_matches)
+        start, _ = self.find_matches[self.find_index]
+        cursor = self.editor.textCursor()
+        cursor.setPosition(start)
+        self.editor.setTextCursor(cursor)
+        self.editor.ensureCursorVisible()
+        self.refresh_find_selections()
+
+    def replace_current_match(self):
+        if not self.replace_footer.isVisible() or not self.find_matches:
+            return
+        start, end = self.find_matches[self.find_index]
+        replacement = self.replace_input.text()
+        cursor = QTextCursor(self.editor.document())
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(replacement)
+        self.editor.setTextCursor(cursor)
+        self.update_find_matches()
+        if self.find_matches:
+            next_position = cursor.position()
+            self.find_index = next((i for i, (match_start, _) in enumerate(self.find_matches)
+                                    if match_start >= next_position), 0)
+            target = QTextCursor(self.editor.document())
+            target.setPosition(self.find_matches[self.find_index][0])
+            self.editor.setTextCursor(target)
+            self.editor.ensureCursorVisible()
+            self.refresh_find_selections()
+
+    def replace_all_matches(self):
+        if not self.replace_footer.isVisible() or not self.find_matches:
+            return
+        replacement = self.replace_input.text()
+        cursor = QTextCursor(self.editor.document())
+        cursor.beginEditBlock()
+        for start, end in reversed(self.find_matches):
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertText(replacement)
+        cursor.endEditBlock()
+        self.update_find_matches()
 
     def update_title(self):
         name = self.current_file.name if self.current_file else "Untitled"
@@ -1264,7 +1621,7 @@ class MainWindow(QMainWindow):
 def main() -> int:
     parser = argparse.ArgumentParser(description="A native Markdown and text notepad")
     parser.add_argument("--version", action="version",
-                        version=f"Pad {Path(__file__).with_name('VERSION').read_text().strip()}")
+                        version=f"{APP_NAME} {Path(__file__).with_name('VERSION').read_text().strip()}")
     parser.add_argument("file", nargs="?", type=Path, help="note to open")
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])

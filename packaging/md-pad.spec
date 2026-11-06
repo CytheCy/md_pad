@@ -17,7 +17,7 @@ Requires:       python3-pyspellchecker >= 0.8.4
 Requires:       python3-pyspellchecker < 1
 
 %description
-Pad is a native Qt notepad for Markdown and plain text, with source highlighting,
+MDPad is a native Qt notepad for Markdown and plain text, with source highlighting,
 offline English spell checking, a heading panel, and configurable themes.
 
 %prep

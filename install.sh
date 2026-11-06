@@ -21,7 +21,7 @@ chmod +x "${launcher_dir}/pad"
 cat > "${desktop_dir}/pad.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Pad
+Name=MDPad
 Comment=Edit Markdown and text notes
 Exec=${launcher_dir}/pad %f
 Icon=md-pad
@@ -36,4 +36,4 @@ fi
 if command -v gtk-update-icon-cache >/dev/null; then
     gtk-update-icon-cache -f -t "${icon_theme_dir}"
 fi
-echo "Pad installed. Launch it from KDE's application menu or run ${launcher_dir}/pad."
+echo "MDPad installed. Launch it from KDE's application menu or run ${launcher_dir}/pad."

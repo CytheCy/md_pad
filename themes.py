@@ -112,6 +112,8 @@ def stylesheet(t):
         #headingList {{ background: {t['sidebar']}; border: none; }}
         #headingList::item {{ padding: 7px 4px; }}
         #headingList::item:hover {{ background: {t['hover']}; }}
+        #findFooter, #replaceFooter {{ background: {t['toolbar']}; border-top: 1px solid {t['border']}; }}
+        #findCount, #replaceCount {{ color: {t['secondary']}; }}
         #status, QMenuBar, QToolBar {{ background: {t['toolbar']}; }}
         #status {{ border-top: 1px solid {t['border']}; }}
         #status QLabel {{ color: {t['secondary']}; font-size: 11px; }}
@@ -124,12 +126,14 @@ def stylesheet(t):
         QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 8px; }}
         QPushButton, QToolButton {{ background: {t['elevated']}; border: 1px solid {t['border']};
             border-radius: 5px; padding: 7px 12px; }}
+        #replaceFooter QToolButton {{ padding: 5px 6px; }}
         QPushButton:hover, QToolButton:hover {{ background: {t['hover']}; border-color: {t['accent']}; }}
         QPushButton:pressed, QToolButton:pressed, QPushButton:checked {{ background: {t['selected']}; }}
         QPushButton:focus, QToolButton:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
             border: 1px solid {t['focus']}; }}
         QRadioButton:focus, QCheckBox:focus {{ outline: 1px solid {t['focus']}; }}
         QLineEdit, QSpinBox, QComboBox {{ border: 1px solid {t['border']}; border-radius: 4px; padding: 5px; }}
+        QLineEdit QToolButton {{ background: transparent; border: none; padding: 0; }}
         QWidget:disabled, QMenu::item:disabled {{ color: {t['disabled']}; }}
         QToolButton#windowControl, QToolButton#closeControl {{ background: transparent; border: none;
             border-radius: 0; padding: 0; min-width: 42px; min-height: 30px; }}
