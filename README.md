@@ -7,12 +7,26 @@ A small native notepad for Markdown and plain text, designed for Fedora KDE.
 Download the `.noarch.rpm` from the [latest release](https://github.com/CytheCy/md_pad/releases/latest), then install it on Fedora 44:
 
 ```bash
-sudo dnf install ./md-pad-1.0.0-1.fc44.noarch.rpm
+sudo dnf install ./md-pad-1.0.1-1.fc44.noarch.rpm
 ```
 
 DNF installs the required dependencies. Launch **MDPad** from the application menu
 or run `pad [note.md]`. Check the version with `pad --version`.
 Remove the RPM with `sudo dnf remove md-pad`.
+
+Once installed from an RPM, open **Settings → Updates…** to check GitHub Releases.
+MDPad downloads the matching RPM only when you select **Install Update**, verifies
+its SHA-256 checksum and RPM signature against the bundled release key, then asks
+Polkit for authorization to run a DNF5 upgrade. Save or discard any unsaved note
+when prompted. A separate installer shows the transaction result and offers to
+restart MDPad. If the release is unsigned, its key is wrong, or its RPM is older,
+the update is refused. Source installations do not support in-app RPM updates.
+
+The upgrade does not remove or reset `~/.config/Pad/Pad.conf`, XDG data or state,
+themes, recent files, personal spelling words, or user notes. This release does
+not change the settings format and needs no migration. Future format changes must
+use a versioned migration, back up the affected XDG files first, and continue to
+read older values.
 
 If you previously used `install.sh`, its per-user launcher and desktop entry
 take precedence over the RPM. Remove those generated files when switching:
@@ -113,9 +127,20 @@ to assess compositor decorations and native desktop interaction.
 ## Building and releasing an RPM
 
 GitHub Actions builds and tests an RPM on pushes to `main`, pull requests, and
-manual runs. Pushing a `v*` tag also publishes a GitHub release with the binary
-RPM, source RPM, and SHA-256 checksums. The tag must match `VERSION` and the
-version in `packaging/md-pad.spec`. No additional GitHub secrets are needed.
+manual runs. Pushing a `v*` tag publishes a GitHub release with a signed binary
+RPM, signed source RPM, and SHA-256 checksums. The tag must match `VERSION` and
+the version in `packaging/md-pad.spec`. Tagged builds require the repository
+secret `MDPAD_SIGNING_KEY`: an ASCII-armored private key matching the fingerprint
+of `MDPAD-RPM-KEY.asc` (`7117A2C4D29B74C68C52CBF200C026953055A7E1`). The
+release job fails if the secret is absent or the key differs. Do not commit the
+private key. The signing key generated for this checkout is stored outside the
+repository in `~/.local/share/md-pad-release`; export it with
+`gpg --homedir ~/.local/share/md-pad-release --armor --export-secret-keys` and
+store the output in the GitHub Actions secret. Back up that key securely.
+Before the key expires, publish an RPM signed by the current key that contains
+the replacement public key and an updater that trusts it; then switch the
+release secret. Never replace the bundled key and signing secret in a single
+release without this transition.
 
 To build and test locally with Podman:
 
@@ -124,12 +149,18 @@ podman run --rm -v "$PWD:/src:Z" -w /src \
   registry.fedoraproject.org/fedora:44 bash packaging/ci.sh
 ```
 
-Output is written to `dist/`. For a future release, update `VERSION`, the spec
-version/changelog, and `CHANGELOG.md`, commit, then push the commit and its tag:
+Output is written to `dist/`; local builds are unsigned and cannot be used by
+the updater until signed with the release key. For a future release, update
+`VERSION`, the spec version/changelog, and `CHANGELOG.md`, commit, then push the
+commit and its tag. Publish only stable, non-draft GitHub Releases; keep the RPM
+name `md-pad` and attach the signed architecture RPM plus `SHA256SUMS`. The API
+checks `releases/latest` and accepts a matching `noarch`, `x86_64`, or `aarch64`
+asset. Existing XDG settings/data/state formats must be read compatibly; if a
+format changes, back up user files and apply a versioned migration.
 
 ```bash
-git tag -a v1.0.1 -m "MDPad v1.0.1"
-git push --atomic origin main v1.0.1
+git tag -a v1.0.2 -m "MDPad v1.0.2"
+git push --atomic origin main v1.0.2
 ```
 
 The project has not declared a license; RPM metadata records this as

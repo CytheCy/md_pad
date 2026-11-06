@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Build, test, and install RPM on Fedora 44
         run: |
           docker run --rm -v "$PWD:/src" -w /src \
@@ -39,6 +41,14 @@ jobs:
         with:
           name: md-pad-rpm
           path: dist
+      - name: Sign release RPMs and regenerate checksums
+        env:
+          MDPAD_SIGNING_KEY: ${{ secrets.MDPAD_SIGNING_KEY }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e MDPAD_SIGNING_KEY \
+            registry.fedoraproject.org/fedora:44 bash -c \
+            'dnf install -y rpm-sign gnupg2 && bash packaging/sign-release.sh'
       - name: Publish release with RPM, source RPM, and checksums
         env:
           GH_TOKEN: ${{ github.token }}

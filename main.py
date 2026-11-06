@@ -60,6 +60,7 @@ from PySide6.QtSvg import QSvgRenderer
 
 from themes import (THEMES, apply_application_theme, resolve_theme, saved_theme_id)
 from spelling import Spelling
+from updater import UpdatesDialog
 
 
 APP_NAME = "MDPad"
@@ -1358,6 +1359,7 @@ class MainWindow(QMainWindow):
         self.addAction(quit_action)
         settings_menu = self.menuBar().addMenu("Settings")
         settings_menu.addAction("Themes…", self.show_appearance)
+        settings_menu.addAction("Updates…", self.show_updates)
         self.spell_check_action = QAction("Spell check (English)", self)
         self.spell_check_action.setCheckable(True)
         self.spell_check_action.setChecked(self.editor.spelling.enabled)
@@ -2003,11 +2005,16 @@ class MainWindow(QMainWindow):
         self.count_label.setText(f"{count} word{'s' if count != 1 else ''}")
 
     def closeEvent(self, event):  # noqa: N802
-        if self.confirm_discard():
+        if getattr(self, "_updating", False) or self.confirm_discard():
             self.settings.sync()
             event.accept()
         else:
             event.ignore()
+
+    def show_updates(self):
+        dialog = UpdatesDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
 
 
 def main() -> int:

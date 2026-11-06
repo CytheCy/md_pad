@@ -1,3 +1,8 @@
+# MDPad v1.0.1
+
+- Add a signed, user-initiated RPM updater under Settings → Updates.
+- Keep RPM package identity and existing user settings and data unchanged.
+
 # MDPad v1.0.0
 
 First release of MDPad, a native Markdown and plain text notepad for Fedora KDE.

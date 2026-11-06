@@ -1,5 +1,5 @@
 Name:           md-pad
-Version:        1.0.0
+Version:        1.0.1
 Release:        1%{?dist}
 Summary:        Native Markdown and plain text notepad
 # No license has been declared by the project; do not assume an open-source license.
@@ -12,6 +12,9 @@ BuildRequires:  python3-pyside6 >= 6.6
 BuildRequires:  python3-pyspellchecker >= 0.8.4
 BuildRequires:  desktop-file-utils
 Requires:       python3
+Requires:       python3-rpm
+Requires:       dnf5
+Requires:       polkit
 Requires:       python3-pyside6 >= 6.6
 Requires:       python3-pyspellchecker >= 0.8.4
 Requires:       python3-pyspellchecker < 1
@@ -28,7 +31,7 @@ offline English spell checking, a heading panel, and configurable themes.
 
 %install
 install -d %{buildroot}%{_datadir}/%{name} %{buildroot}%{_bindir}
-install -m 644 main.py themes.py spelling.py VERSION md_pad_icon.svg %{buildroot}%{_datadir}/%{name}/
+install -m 644 main.py themes.py spelling.py updater.py update_helper.py VERSION md_pad_icon.svg MDPAD-RPM-KEY.asc %{buildroot}%{_datadir}/%{name}/
 install -d %{buildroot}%{_datadir}/%{name}/boxicons
 install -m 644 boxicons/*.svg boxicons/LICENSE %{buildroot}%{_datadir}/%{name}/boxicons/
 cat > %{buildroot}%{_bindir}/pad <<'EOF'
@@ -51,5 +54,8 @@ QT_QPA_PLATFORM=offscreen %{__python3} -m unittest discover -s tests -v
 %{_datadir}/icons/hicolor/scalable/apps/md-pad.svg
 
 %changelog
+* Fri Nov 06 2026 Cy Porter <portercy@gmail.com> - 1.0.1-1
+- Add signed, user-initiated DNF updates.
+
 * Wed Nov 04 2026 Cy Porter <portercy@gmail.com> - 1.0.0-1
 - Initial RPM release.

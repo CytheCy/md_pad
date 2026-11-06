@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Run inside a disposable Fedora container as root.
 set -euo pipefail
-dnf install -y rpm-build python3-devel python3-pyside6 python3-pyspellchecker \
+dnf install -y rpm-build python3-devel python3-pyside6 python3-pyspellchecker python3-rpm git \
     desktop-file-utils tar gzip
 bash packaging/build-rpm.sh
-dnf install -y dist/*.noarch.rpm
+bash packaging/test-upgrade.sh
 test "$(pad --version)" = "MDPad $(cat VERSION)"
 cd /tmp
 QT_QPA_PLATFORM=offscreen python3 - <<'PY'
