@@ -10,12 +10,13 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRectF, QSaveFile, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QColor,
     QClipboard,
+    QDesktopServices,
     QFont,
     QIcon,
     QKeySequence,
@@ -93,6 +94,94 @@ def fmt(color: str | None = None, *, bold: bool = False, italic: bool = False,
     return result
 
 
+def web_link_at(text: str, offset: int, markdown: bool = True) -> str | None:
+    """Find a web link at a character offset in one source line."""
+    if markdown:
+        for code in re.finditer(r"(?<!`)(`+)([^`\n]+)\1(?!`)", text):
+            if code.start() <= offset < code.end():
+                return None
+        for match in re.finditer(r"(?<!!)\[([^\]\n]+)\]\(", text):
+            if not match.start(1) <= offset < match.end(1):
+                continue
+            start = match.end()
+            depth = 1
+            for end in range(start, len(text)):
+                if text[end] == '(':
+                    depth += 1
+                elif text[end] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        url = text[start:end]
+                        if re.fullmatch(r'(?:https?://|www\.)[^\s]+', url):
+                            return url if url.startswith('http') else 'https://' + url
+                        return None
+    for match in re.finditer(r"(?:https?://|www\.)[^\s<>\[\]`]+", text):
+        url = match.group().rstrip('.,;:!?]}')
+        while url.endswith(')') and url.count(')') > url.count('('):
+            url = url[:-1]
+        end = match.start() + len(url)
+        if match.start() <= offset < end:
+            return url if url.startswith('http') else 'https://' + url
+    return None
+
+
+def table_cells(line: str):
+    """Return cell and pipe spans, ignoring escaped and code-span pipes."""
+    pipes = []
+    code_run = 0
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if char == '\\':
+            start = index
+            while index < len(line) and line[index] == '\\':
+                index += 1
+            if (index - start) % 2 and index < len(line):
+                index += 1
+            continue
+        if char == '`':
+            end = index
+            while end < len(line) and line[end] == '`':
+                end += 1
+            run = end - index
+            if code_run == run:
+                code_run = 0
+            elif not code_run and line.find('`' * run, end) != -1:
+                code_run = run
+            index = end
+            continue
+        if char == '|' and not code_run:
+            pipes.append(index)
+        index += 1
+    if not pipes:
+        return None
+    starts = [0] + [pipe + 1 for pipe in pipes]
+    ends = pipes + [len(line)]
+    cells = list(zip(starts, ends))
+    if not line[:pipes[0]].strip():
+        cells.pop(0)
+    if not line[pipes[-1] + 1:].strip():
+        cells.pop()
+    return (cells, pipes) if cells else None
+
+
+def table_alignment(line: str):
+    parsed = table_cells(line)
+    if parsed is None:
+        return None
+    cells, _ = parsed
+    if not cells:
+        return None
+    alignment = []
+    for start, end in cells:
+        marker = line[start:end].strip()
+        if not re.fullmatch(r':?-{3,}:?', marker):
+            return None
+        alignment.append('center' if marker.startswith(':') and marker.endswith(':')
+                         else 'right' if marker.endswith(':') else 'left')
+    return alignment
+
+
 class MarkdownHighlighter(QSyntaxHighlighter):
     """Style source text in place, keeping every Markdown character editable."""
 
@@ -116,6 +205,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         was_modified = document.isModified()
         previous = self.active_block
         self.active_block = block
+        if (self.editor._table_edit_position is not None
+                and block.position() != self.editor._table_edit_position):
+            self.editor._table_edit_position = None
         if previous is not None and previous.isValid():
             self.rehighlightBlock(previous)
         self.rehighlightBlock(block)
@@ -203,7 +295,26 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self.source_format(0, len(text), fmt(Qt.GlobalColor.transparent, family="monospace"))
             return
 
-        heading = re.match(r"^(#{1,6})(\s+)(.*)$", text)
+        table = None
+        parsed = table_cells(text)
+        previous = self.previousBlockState()
+        if parsed is not None:
+            cells, pipes = parsed
+            next_block = self.currentBlock().next()
+            next_alignment = (table_alignment(next_block.text())
+                              if next_block.isValid() else None)
+            if next_alignment is not None and len(cells) == len(next_alignment):
+                table = 'header'
+                self.setCurrentBlockState(2)
+            elif (previous == 2 and table_alignment(text) is not None
+                  and len(cells) == len(table_cells(self.currentBlock().previous().text())[0])):
+                table = 'delimiter'
+                self.setCurrentBlockState(3)
+            elif previous in (3, 4):
+                table = 'body'
+                self.setCurrentBlockState(4)
+
+        heading = re.match(r"^(#{1,6})(\s+)(.*)$", text) if table is None else None
         if heading:
             level = len(heading.group(1))
             size = ([25, 21, 18, 16, 14, 13][level - 1]
@@ -217,8 +328,17 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 marker.setFontLetterSpacingType(QFont.SpacingType.PercentageSpacing)
                 marker.setFontLetterSpacing(1)
             self.source_format(0, heading.end(2), marker)
-        elif re.match(r"^\s*(?:[-*_]\s*){3,}$", text):
-            self.source_format(0, len(text), fmt(self.theme['md_rule']))
+        elif table:
+            if table == 'header':
+                self.source_format(0, len(text), fmt(self.theme['md_heading_secondary'], bold=True))
+            elif table == 'delimiter':
+                self.source_format(0, len(text), fmt(self.muted))
+            for pipe in pipes:
+                self.source_format(pipe, 1, fmt(self.muted))
+        elif re.match(r"^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$", text):
+            marker = (self.collapsed_marker_format() if self.currentBlock() != self.active_block
+                      else fmt(self.theme['md_rule']))
+            self.source_format(0, len(text), marker)
         else:
             lead = re.match(r"^(\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+|\[[ xX]\]\s+)+)", text)
             if lead:
@@ -264,6 +384,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self.source_format(match.end(2), match.end() - match.end(2), marker)
         for match in re.finditer(r"!?\[[^\]\n]+\]\([^\)\n]+\)", text):
             self.source_format(match.start(), match.end() - match.start(), fmt(self.accent))
+        if table and (self.editor is None or
+                      self.editor._table_edit_position != self.currentBlock().position()):
+            self.source_format(0, len(text), fmt(Qt.GlobalColor.transparent))
 
 
 class NoteEditor(QTextEdit):
@@ -274,10 +397,15 @@ class NoteEditor(QTextEdit):
         self.max_page_width = 0
         self._spelling_selections = []
         self._code_selections = []
+        self._table_selections = []
         self._find_selections = []
         self.code_panels = []
+        self.table_regions = []
+        self._table_edit_position = None
         self._copy_pressed_panel = None
         self._hovered_code_panel = None
+        self._hovered_link = False
+        self._pressed_link = None
         self._code_update_timer = QTimer(self)
         self._code_update_timer.setSingleShot(True)
         self._code_update_timer.timeout.connect(self.update_code_panels)
@@ -297,9 +425,18 @@ class NoteEditor(QTextEdit):
         self._spelling_selections = list(selections)
         self.refresh_extra_selections()
 
+    def setPlainText(self, text):  # noqa: N802 (Qt API)
+        self._table_edit_position = None
+        super().setPlainText(text)
+
+    def clear(self):
+        self._table_edit_position = None
+        super().clear()
+
     def refresh_extra_selections(self):
         super().setExtraSelections(
-            self._code_selections + self._find_selections + self._spelling_selections)
+            self._code_selections + self._table_selections
+            + self._find_selections + self._spelling_selections)
 
     def extraSelections(self):  # noqa: N802 (Qt API)
         return self._spelling_selections
@@ -309,14 +446,29 @@ class NoteEditor(QTextEdit):
 
     def update_code_panels(self):
         highlighter = getattr(self, 'highlighter', None)
+        if highlighter is not None and highlighter.enabled:
+            # A table header depends on the following delimiter line.
+            was_modified = self.document().isModified()
+            highlighter.rehighlight()
+            self.document().setModified(was_modified)
         self.code_panels = []
         self._code_selections = []
+        self._table_selections = []
         self._hovered_code_panel = None
         self.viewport().unsetCursor()
         if highlighter is not None and highlighter.enabled:
             opening = None
             block = self.document().firstBlock()
             while block.isValid():
+                if block.userState() in (2, 3, 4):
+                    selection = QTextEdit.ExtraSelection()
+                    selection.cursor = QTextCursor(block)
+                    shade = QColor(highlighter.theme['elevated'])
+                    if block.userState() == 4 and block.blockNumber() % 2:
+                        shade.setAlpha(110)
+                    selection.format.setBackground(shade)
+                    selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                    self._table_selections.append(selection)
                 if opening is None and block.userState() == 1 and re.match(
                         r"^\s*(?:`{3,}|~{3,})", block.text()):
                     opening = block
@@ -336,6 +488,7 @@ class NoteEditor(QTextEdit):
                         self.code_panels.append((opening.position(), block.position()))
                         opening = None
                 block = block.next()
+            self.update_table_regions()
         self.refresh_extra_selections()
         if highlighter is not None:
             was_modified = self.document().isModified()
@@ -343,7 +496,59 @@ class NoteEditor(QTextEdit):
             self.document().setModified(was_modified)
         self.viewport().update()
 
+    def update_table_regions(self):
+        self.table_regions = []
+        block = self.document().firstBlock()
+        while block.isValid():
+            if block.userState() != 2:
+                block = block.next()
+                continue
+            delimiter = block.next()
+            if not delimiter.isValid() or delimiter.userState() != 3:
+                block = block.next()
+                continue
+            alignment = table_alignment(delimiter.text())
+            rows = []
+            current = block
+            while current.isValid() and current.userState() in (2, 3, 4):
+                if current.userState() != 3:
+                    docs = []
+                    for start, end in table_cells(current.text())[0]:
+                        cell = current.text()[start:end].strip()
+                        doc = QTextDocument()
+                        doc.setDocumentMargin(0)
+                        doc.setDefaultFont(self.font())
+                        doc.setMarkdown(cell, QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
+                        content = QTextCursor(doc)
+                        content.select(QTextCursor.SelectionType.Document)
+                        style = fmt(self.highlighter.theme['md_heading_secondary']
+                                    if current.userState() == 2 else self.highlighter.theme['text'],
+                                    bold=current.userState() == 2)
+                        content.mergeCharFormat(style)
+                        docs.append(doc)
+                    rows.append((current.position(), docs))
+                current = current.next()
+            self.table_regions.append((delimiter.position(), alignment, rows))
+            block = current
+
     def keyPressEvent(self, event):  # noqa: N802 (Qt API)
+        if (getattr(self, 'highlighter', None) is not None
+                and self.highlighter.enabled and not self.textCursor().hasSelection()
+                and self.textCursor().block().userState() in (2, 4)):
+            self._table_edit_position = self.textCursor().block().position()
+            self.highlighter.rehighlightBlock(self.textCursor().block())
+            if event.key() == Qt.Key.Key_Tab and event.modifiers() in (
+                    Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier):
+                if self.move_table_cell(event.modifiers() == Qt.KeyboardModifier.ShiftModifier):
+                    event.accept()
+                    return
+            if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                    and event.modifiers() == Qt.KeyboardModifier.NoModifier
+                    and self.textCursor().block().userState() == 4
+                    and self.textCursor().atBlockEnd()):
+                self.insert_table_row(self.textCursor().block())
+                event.accept()
+                return
         if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
                 and event.modifiers() == Qt.KeyboardModifier.NoModifier):
             cursor = self.textCursor()
@@ -369,6 +574,57 @@ class NoteEditor(QTextEdit):
                     return
         super().keyPressEvent(event)
 
+    def set_table_cell_cursor(self, block, cell):
+        start, end = cell
+        text = block.text()
+        start += len(text[start:end]) - len(text[start:end].lstrip())
+        offset = len(text[:start].encode('utf-16-le')) // 2
+        cursor = QTextCursor(block)
+        cursor.setPosition(block.position() + offset)
+        self._table_edit_position = block.position()
+        self.setTextCursor(cursor)
+        self.highlighter.rehighlightBlock(block)
+
+    def insert_table_row(self, after_block):
+        parsed = table_cells(after_block.text())
+        count = len(parsed[0])
+        row = '| ' + ' | '.join([''] * count) + ' |'
+        cursor = QTextCursor(after_block)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        cursor.insertText('\n' + row)
+        self.set_table_cell_cursor(cursor.block(), table_cells(row)[0][0])
+
+    def move_table_cell(self, backwards):
+        block = self.textCursor().block()
+        parsed = table_cells(block.text())
+        if parsed is None:
+            return False
+        cells, _ = parsed
+        offset = self.textCursor().positionInBlock()
+        index = next((i for i, (_, end) in enumerate(cells) if offset <= end),
+                     len(cells) - 1)
+        target = index + (-1 if backwards else 1)
+        if 0 <= target < len(cells):
+            self.set_table_cell_cursor(block, cells[target])
+            return True
+        if backwards:
+            other = block.previous()
+            if other.userState() == 3:
+                other = other.previous()
+            if other.userState() not in (2, 4):
+                return False
+            self.set_table_cell_cursor(other, table_cells(other.text())[0][-1])
+        else:
+            other = block.next()
+            if other.userState() == 3:
+                other = other.next()
+            if other.userState() == 4:
+                self.set_table_cell_cursor(other, table_cells(other.text())[0][0])
+            else:
+                after = block.next() if block.userState() == 2 else block
+                self.insert_table_row(after)
+        return True
+
     def paintEvent(self, event):  # noqa: N802 (Qt API)
         super().paintEvent(event)
         highlighter = getattr(self, 'highlighter', None)
@@ -376,10 +632,25 @@ class NoteEditor(QTextEdit):
             return
         painter = QPainter(self.viewport())
         self.paint_code_panels(painter, event.rect())
+        self.paint_tables(painter, event.rect())
+        painter.setPen(QColor(highlighter.theme['md_rule']))
+        inset = self.document().documentMargin()
+        rule_right = self.viewport().width() - inset
+        active_block = self.textCursor().block()
+        block = self.cursorForPosition(event.rect().topLeft()).block()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            rect = self.cursorRect(cursor)
+            if rect.top() > event.rect().bottom():
+                break
+            if (block != active_block and block.userState() != 1
+                    and re.fullmatch(r" {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})", block.text())):
+                y = rect.center().y()
+                painter.drawLine(int(rect.left()), y, int(rule_right), y)
+            block = block.next()
         painter.setPen(Qt.PenStyle.NoPen)
         list_color = QColor(highlighter.theme['md_list'])
         painter.setBrush(list_color)
-        active_block = self.textCursor().block()
         block = self.cursorForPosition(event.rect().topLeft()).block()
         while block.isValid():
             cursor = QTextCursor(block)
@@ -409,6 +680,76 @@ class NoteEditor(QTextEdit):
             block = block.next()
         painter.end()
 
+    def paint_tables(self, painter, dirty):
+        theme = self.highlighter.theme
+        document = self.document()
+        editing = self._table_edit_position
+        left_margin = document.documentMargin()
+        for delimiter_position, alignment, rows in self.table_regions:
+            delimiter = document.findBlock(delimiter_position)
+            if editing == delimiter_position or not rows:
+                continue
+            first = document.findBlock(rows[0][0])
+            left = self.cursorRect(QTextCursor(first)).left()
+            available = max(1, self.viewport().width() - left - left_margin)
+            count = len(alignment)
+            natural = [max(64.0, max((docs[i].idealWidth() + 24
+                                      for _, docs in rows if i < len(docs)), default=64.0))
+                       for i in range(count)]
+            total = sum(natural)
+            if total <= available:
+                widths = [width + (available - total) / count for width in natural]
+            else:
+                widths = [available * width / total for width in natural]
+            boundaries = [left]
+            for width in widths:
+                boundaries.append(boundaries[-1] + width)
+            for row_index, (position, docs) in enumerate(rows):
+                block = document.findBlock(position)
+                top = self.cursorRect(QTextCursor(block)).top()
+                if row_index + 1 < len(rows):
+                    bottom = self.cursorRect(QTextCursor(
+                        document.findBlock(rows[row_index + 1][0]))).top()
+                else:
+                    last = QTextCursor(block)
+                    last.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                    bottom = self.cursorRect(last).bottom() + 7
+                row_rect = QRectF(left, top, available, bottom - top)
+                if not row_rect.intersects(QRectF(dirty)):
+                    continue
+                if position != editing:
+                    shade = theme['elevated'] if row_index == 0 or row_index % 2 == 0 else theme['editor']
+                    painter.fillRect(row_rect, QColor(shade))
+                painter.setPen(QColor(theme['border']))
+                painter.drawRect(row_rect)
+                for column in range(1, count):
+                    painter.drawLine(int(boundaries[column]), int(top),
+                                     int(boundaries[column]), int(bottom))
+                if position == editing:
+                    continue
+                for column, doc in enumerate(docs[:count]):
+                    width = max(1, widths[column] - 16)
+                    doc.setTextWidth(width)
+                    content = QTextCursor(doc)
+                    content.select(QTextCursor.SelectionType.Document)
+                    paragraph = content.blockFormat()
+                    paragraph.setAlignment({'left': Qt.AlignmentFlag.AlignLeft,
+                                            'center': Qt.AlignmentFlag.AlignHCenter,
+                                            'right': Qt.AlignmentFlag.AlignRight}[alignment[column]])
+                    content.mergeBlockFormat(paragraph)
+                    painter.save()
+                    cell = QRectF(boundaries[column] + 8, top, width, bottom - top)
+                    painter.setClipRect(cell)
+                    scale = min(1.0, max(0.1, (cell.height() - 2) / doc.size().height()))
+                    offset = (cell.width() * (1 - scale) *
+                              (1 if alignment[column] == 'right' else
+                               0.5 if alignment[column] == 'center' else 0))
+                    painter.translate(cell.left() + offset,
+                                      cell.top() + (cell.height() - doc.size().height() * scale) / 2)
+                    painter.scale(scale, scale)
+                    doc.drawContents(painter, QRectF(0, 0, width, doc.size().height()))
+                    painter.restore()
+
     def code_panel_rect(self, start_position, end_position):
         document = self.document()
         first = QTextCursor(document.findBlock(start_position))
@@ -428,20 +769,52 @@ class NoteEditor(QTextEdit):
                      if self.code_panel_rect(start, end).contains(position)), None)
 
     def mouseMoveEvent(self, event):  # noqa: N802 (Qt API)
+        super().mouseMoveEvent(event)
         hovered = self.code_panel_at(event.position())
         if hovered != self._hovered_code_panel:
             self._hovered_code_panel = hovered
             self.viewport().update()
-        if hovered and self.code_copy_rect(self.code_panel_rect(*hovered)).contains(event.position()):
+        over_copy = (hovered is not None and self.code_copy_rect(
+            self.code_panel_rect(*hovered)).contains(event.position()))
+        over_link = not over_copy and self.web_link_at_position(event.position()) is not None
+        if over_link != self._hovered_link:
+            if over_link:
+                QApplication.setOverrideCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                QApplication.restoreOverrideCursor()
+            self._hovered_link = over_link
+        if over_copy:
             self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
             self.viewport().setToolTip("Copy code")
+        elif over_link:
+            self.viewport().setToolTip("Open link")
         else:
             self.viewport().unsetCursor()
             self.viewport().setToolTip("")
-        super().mouseMoveEvent(event)
+
+    def web_link_at_position(self, position):
+        cursor = self.cursorForPosition(position.toPoint())
+        block = cursor.block()
+        if not block.isValid():
+            return None
+        highlighter = getattr(self, 'highlighter', None)
+        markdown = highlighter is not None and highlighter.enabled
+        if markdown and block.userState() == 1:
+            return None
+        offset = cursor.positionInBlock()
+        if offset and self.cursorRect(cursor).left() > position.x():
+            offset -= 1
+        # QTextCursor offsets use UTF-16 units; Python strings use code points.
+        text = block.text()
+        offset = len(text.encode('utf-16-le')[:offset * 2].decode('utf-16-le', errors='ignore'))
+        return web_link_at(text, offset, markdown)
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt API)
-        if watched is self.viewport() and event.type() == QEvent.Type.Leave:
+        if (watched is self.viewport()
+                and event.type() in (QEvent.Type.Leave, QEvent.Type.Hide)):
+            if self._hovered_link:
+                QApplication.restoreOverrideCursor()
+                self._hovered_link = False
             if self._hovered_code_panel is not None:
                 self._hovered_code_panel = None
                 self.viewport().update()
@@ -451,6 +824,7 @@ class NoteEditor(QTextEdit):
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt API)
         self._copy_pressed_panel = None
+        self._pressed_link = None
         if (event.button() == Qt.MouseButton.LeftButton
                 and getattr(self, 'highlighter', None) is not None
                 and self.highlighter.enabled):
@@ -461,11 +835,23 @@ class NoteEditor(QTextEdit):
                 self.viewport().update()
                 event.accept()
                 return
+        if (event.button() == Qt.MouseButton.LeftButton
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+            url = self.web_link_at_position(event.position())
+            if url:
+                self._pressed_link = (url, event.position())
         super().mousePressEvent(event)
+        block = self.textCursor().block()
+        if block.userState() in (2, 3, 4):
+            self._table_edit_position = block.position()
+            self.highlighter.rehighlightBlock(block)
+            self.viewport().update()
 
     def mouseReleaseEvent(self, event):  # noqa: N802 (Qt API)
         panel = self._copy_pressed_panel
         self._copy_pressed_panel = None
+        pressed_link = self._pressed_link
+        self._pressed_link = None
         if panel is not None and event.button() == Qt.MouseButton.LeftButton:
             start, end = panel
             if self.code_copy_rect(self.code_panel_rect(start, end)).contains(event.position()):
@@ -486,6 +872,12 @@ class NoteEditor(QTextEdit):
                 QToolTip.showText(event.globalPosition().toPoint(), "Copied",
                                   self.viewport(), self.code_copy_rect(
                                       self.code_panel_rect(start, end)).toRect(), 1500)
+            event.accept()
+            return
+        if (pressed_link is not None and event.button() == Qt.MouseButton.LeftButton
+                and (event.position() - pressed_link[1]).manhattanLength()
+                < QApplication.startDragDistance() and not self.textCursor().hasSelection()):
+            QDesktopServices.openUrl(QUrl(pressed_link[0]))
             event.accept()
             return
         super().mouseReleaseEvent(event)
