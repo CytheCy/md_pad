@@ -1,3 +1,7 @@
+# MDPad v1.0.2
+
+- Fix the Fedora release build for the signed updater.
+
 # MDPad v1.0.1
 
 - Add a signed, user-initiated RPM updater under Settings → Updates.

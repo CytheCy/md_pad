@@ -159,8 +159,8 @@ asset. Existing XDG settings/data/state formats must be read compatibly; if a
 format changes, back up user files and apply a versioned migration.
 
 ```bash
-git tag -a v1.0.2 -m "MDPad v1.0.2"
-git push --atomic origin main v1.0.2
+git tag -a v1.0.3 -m "MDPad v1.0.3"
+git push --atomic origin main v1.0.3
 ```
 
 The project has not declared a license; RPM metadata records this as
