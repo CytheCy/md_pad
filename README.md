@@ -35,6 +35,14 @@ python3 main.py [note.md]
 
 Use **File → Open…** to open a note, or drag a file onto the editor. Markdown source stays directly editable while headings, emphasis, code, links, lists, and quotes receive visual styling. Heading `#` markers stay hidden until you click or move the cursor onto that line, and hide again when you leave it.
 
+Start a bullet with `- `, `* `, or `+ ` at the beginning of a line. Inactive bullet lines show an indented dot; the Markdown marker reappears when you move the cursor onto the line. Enter continues the bullet with the same marker; Enter again on an empty bullet ends the list and leaves only one newline in the saved text.
+
+Numbered lists work the same way with markers such as `1. ` or `1) `. Inactive items show an indented number, and Enter continues with the next number. Enter on the empty next item ends the list without adding a blank line to the saved text.
+
+Wrap text in `*single*` or `_single_` markers for italics, and `**double**` or `__double__` markers for bold. The markers hide while the cursor is on another line and reappear for editing when you move onto their line; the saved Markdown retains them.
+
+Single backticks wrap inline code, and triple backticks on separate lines fence a code block. Fenced code appears in a rounded, padded panel. Hover over the panel to reveal the copy icon at the upper right; clicking it copies the code without the fence lines. Inline backticks reappear when you move the cursor onto their line, and both code fences reappear when the cursor is anywhere inside their block. The saved Markdown retains all delimiters.
+
 Use **File → Open Recent** to reopen one of your last 10 opened or saved files. The list is remembered across restarts; **Clear Recent** clears it.
 
 Markdown notes with two or more `#` headings automatically open a heading panel on the right. Click a heading to jump to it in the editor. Drag the divider between the editor and the heading panel to adjust their widths. The side panel icon immediately left of Minimize closes or reopens the panel; it only appears when there are at least two headings. The list updates as you edit and excludes fenced code. Plain text files do not show the panel.

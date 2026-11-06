@@ -4,11 +4,12 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from main import MainWindow
 
@@ -26,6 +27,7 @@ class HeadingPanelTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def setUp(self):
+        QSettings('Pad', 'Pad').clear()
         self.window = MainWindow()
         self.window.show()
         self.editor = self.window.editor
@@ -100,3 +102,53 @@ class HeadingPanelTests(unittest.TestCase):
             w.new_file()
             self.assertFalse(w.heading_button.isVisible())
             self.assertEqual(w.heading_list.count(), 0)
+
+    def test_panel_width_survives_reopening_when_closed_hidden(self):
+        self.editor.setPlainText('# First\n## Second')
+        self.app.processEvents()
+        splitter = self.window.content_splitter
+        splitter.moveSplitter(splitter.width() - 366, 1)
+        self.app.processEvents()
+        saved_width = splitter.sizes()[1]
+        self.assertGreater(saved_width, 240)
+        self.assertEqual(QSettings('Pad', 'Pad').value('heading_panel_width', type=int), saved_width)
+
+        self.window.heading_button.click()
+        self.assertFalse(self.window.heading_panel.isVisible())
+        self.editor.document().setModified(False)
+        self.window.close()
+        self.window.deleteLater()
+        self.app.processEvents()
+
+        self.window = MainWindow()
+        self.window.show()
+        self.editor = self.window.editor
+        self.editor.setPlainText('# First\n## Second')
+        self.app.processEvents()
+        self.assertTrue(self.window.heading_panel.isVisible())
+        self.assertEqual(self.window.content_splitter.sizes()[1], saved_width)
+
+    def test_clicking_opened_file_does_not_request_save(self):
+        source = '# First\nBody text\n## Second\nMore body\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'note.md'
+            path.write_text(source)
+            self.assertTrue(self.window.open_file(path))
+            self.app.processEvents()
+            document = self.editor.document()
+            self.assertFalse(document.isModified())
+
+            for line in (0, 1, 2, 3):
+                cursor = QTextCursor(document.findBlockByNumber(line))
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                QTest.mouseClick(self.editor.viewport(), Qt.MouseButton.LeftButton,
+                                 pos=self.editor.cursorRect(cursor).center())
+                self.app.processEvents()
+                self.assertFalse(document.isModified())
+                self.assertFalse(self.window.windowTitle().startswith('*'))
+
+            self.assertEqual(self.editor.toPlainText(), source)
+            self.assertEqual(document.availableUndoSteps(), 0)
+            with patch.object(QMessageBox, 'question') as question:
+                self.assertTrue(self.window.close())
+                question.assert_not_called()

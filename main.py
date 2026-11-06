@@ -5,22 +5,26 @@ from __future__ import annotations
 
 import argparse
 import codecs
+from functools import lru_cache
 import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSaveFile, QSettings, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, QSaveFile, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
+    QClipboard,
     QFont,
     QIcon,
     QKeySequence,
     QPalette,
     QPainter,
+    QPainterPath,
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
+    QTextFormat,
     QSyntaxHighlighter,
 )
 from PySide6.QtWidgets import (
@@ -43,9 +47,11 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTextEdit,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtSvg import QSvgRenderer
 
 
 from themes import (THEMES, apply_application_theme, resolve_theme, saved_theme_id)
@@ -58,6 +64,14 @@ MAX_RECENT_FILES = 10
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 72
+
+
+@lru_cache(maxsize=32)
+def boxicon(name: str, color: str) -> QSvgRenderer:
+    """Load a bundled Boxicons SVG with the current theme color."""
+    source = (Path(__file__).resolve().parent / "boxicons" / f"bx-{name}.svg").read_text()
+    source = source.replace("<svg ", f'<svg fill="{color}" ', 1)
+    return QSvgRenderer(source.encode())
 
 
 def fmt(color: str | None = None, *, bold: bool = False, italic: bool = False,
@@ -84,19 +98,49 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.enabled = True
         self.editor = editor
         self.active_block = editor.textCursor().block() if editor else None
+        self.active_code_panel = None
         if editor:
+            editor.highlighter = self
             editor.cursorPositionChanged.connect(self.update_active_block)
+            editor.textChanged.connect(editor.schedule_code_panel_update)
         self.update_colors(theme)
 
     def update_active_block(self):
         block = self.editor.textCursor().block()
         if block == self.active_block:
             return
+        document = self.document()
+        was_modified = document.isModified()
         previous = self.active_block
         self.active_block = block
         if previous is not None and previous.isValid():
             self.rehighlightBlock(previous)
         self.rehighlightBlock(block)
+        self.sync_active_code_panel()
+        # Rehighlighting after block-format changes can mark Qt's document dirty.
+        # Cursor movement only changes the display, never the note itself.
+        if document.isModified() != was_modified:
+            document.setModified(was_modified)
+        self.editor.viewport().update()
+
+    def sync_active_code_panel(self):
+        if not self.editor:
+            return
+        position = self.editor.textCursor().block().position()
+        active = next(((start, end) for start, end in self.editor.code_panels
+                       if start <= position <= end), None)
+        if active == self.active_code_panel:
+            return
+        previous = self.active_code_panel
+        self.active_code_panel = active
+        for panel in (previous, active):
+            if panel:
+                for fence_position in set(panel):
+                    self.rehighlightBlock(self.document().findBlock(fence_position))
+
+    def code_fence_is_active(self):
+        panel = self.active_code_panel
+        return panel is not None and self.currentBlock().position() in panel
 
     def update_colors(self, theme):
         self.theme = theme
@@ -105,11 +149,24 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.code = theme['md_code']
         self.quote = theme['md_quote']
         self.rehighlight()
+        if self.editor:
+            self.editor.update_code_panels()
 
     def code_format(self):
         style = fmt(self.code, family="monospace")
         style.setBackground(QColor(self.theme['md_code_background']))
         return style
+
+    def code_block_format(self):
+        return fmt(self.theme['text'], family="monospace")
+
+    def collapsed_marker_format(self):
+        marker = QTextCharFormat()
+        marker.setForeground(QColor(Qt.GlobalColor.transparent))
+        marker.setFontPointSize(0.01)
+        marker.setFontLetterSpacingType(QFont.SpacingType.PercentageSpacing)
+        marker.setFontLetterSpacing(1)
+        return marker
 
     def source_format(self, start, length, style):
         # Python regex offsets count code points; Qt counts UTF-16 units.
@@ -124,16 +181,23 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             return
         if self.previousBlockState() == 1:
             self.setCurrentBlockState(1)
-            self.source_format(0, len(text), self.code_format())
-            if re.match(r"^\s*(`{3,}|~{3,})", text):
+            self.source_format(0, len(text), self.code_block_format())
+            closing_fence = re.match(r"^\s*(`{3,}|~{3,})", text)
+            if closing_fence:
                 self.setCurrentBlockState(0)
                 self.source_format(0, len(text), fmt(self.muted, family="monospace"))
+                if (closing_fence.group(1).startswith('`')
+                        and not self.code_fence_is_active()):
+                    self.source_format(0, len(text), fmt(Qt.GlobalColor.transparent, family="monospace"))
             return
 
         fence = re.match(r"^\s*(`{3,}|~{3,})", text)
         if fence:
             self.setCurrentBlockState(1)
             self.source_format(0, len(text), fmt(self.muted, family="monospace"))
+            if (fence.group(1).startswith('`')
+                    and not self.code_fence_is_active()):
+                self.source_format(0, len(text), fmt(Qt.GlobalColor.transparent, family="monospace"))
             return
 
         heading = re.match(r"^(#{1,6})(\s+)(.*)$", text)
@@ -156,21 +220,47 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             lead = re.match(r"^(\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+|\[[ xX]\]\s+)+)", text)
             if lead:
                 self.source_format(0, lead.end(), fmt(self.theme['md_list']))
+                list_marker = re.match(r"^(?:[-*+] |\d+[.)] )", text)
+                if list_marker and self.currentBlock() != self.active_block:
+                    marker = QTextCharFormat()
+                    marker.setForeground(QColor(Qt.GlobalColor.transparent))
+                    marker.setFontLetterSpacingType(QFont.SpacingType.AbsoluteSpacing)
+                    marker.setFontLetterSpacing(5)
+                    self.source_format(0, list_marker.end(), marker)
                 checkbox = re.search(r'\[[ xX]\]', lead.group(1))
                 if checkbox:
                     self.source_format(checkbox.start(), 3, fmt(self.theme['md_checkbox']))
                 if ">" in lead.group(1):
                     self.source_format(lead.end(), len(text) - lead.end(), fmt(self.quote))
 
-        # Apply inline styles after block styles. Syntax marks remain visible in a quiet color.
+        # Format emphasis content while collapsing its source marks off the active line.
+        code_matches = list(re.finditer(r"(?<!`)(`+)([^`\n]+)\1(?!`)", text))
+        code_spans = [(m.start(), m.end()) for m in code_matches]
         for pattern, styled in (
             (r"(?<!\*)\*\*([^*\n]+)\*\*(?!\*)|__([^_\n]+)__", fmt(self.theme['md_bold'], bold=True)),
             (r"(?<!\*)\*([^*\n]+)\*(?!\*)|(?<!_)_([^_\n]+)_(?!_)", fmt(self.theme['md_italic'], italic=True)),
-            (r"`+[^`\n]+`+", self.code_format()),
-            (r"!?\[[^\]\n]+\]\([^\)\n]+\)", fmt(self.accent)),
         ):
             for match in re.finditer(pattern, text):
-                self.source_format(match.start(), match.end() - match.start(), styled)
+                if any(match.start() < end and start < match.end()
+                       for start, end in code_spans):
+                    continue
+                content = 1 if match.start(1) != -1 else 2
+                self.source_format(match.start(content),
+                                   match.end(content) - match.start(content), styled)
+                marker = fmt(self.muted)
+                if self.currentBlock() != self.active_block:
+                    marker = self.collapsed_marker_format()
+                self.source_format(match.start(), match.start(content) - match.start(), marker)
+                self.source_format(match.end(content), match.end() - match.end(content), marker)
+
+        for match in code_matches:
+            self.source_format(match.start(), match.end() - match.start(), self.code_format())
+            if self.currentBlock() != self.active_block:
+                marker = self.collapsed_marker_format()
+                self.source_format(match.start(), match.start(2) - match.start(), marker)
+                self.source_format(match.end(2), match.end() - match.end(2), marker)
+        for match in re.finditer(r"!?\[[^\]\n]+\]\([^\)\n]+\)", text):
+            self.source_format(match.start(), match.end() - match.start(), fmt(self.accent))
 
 
 class NoteEditor(QTextEdit):
@@ -179,14 +269,258 @@ class NoteEditor(QTextEdit):
     def __init__(self):
         super().__init__()
         self.max_page_width = 0
+        self._spelling_selections = []
+        self._code_selections = []
+        self.code_panels = []
+        self._copy_pressed_panel = None
+        self._hovered_code_panel = None
+        self._code_update_timer = QTimer(self)
+        self._code_update_timer.setSingleShot(True)
+        self._code_update_timer.timeout.connect(self.update_code_panels)
         self.setAcceptDrops(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setPlaceholderText("Start writing…")
         self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * 4)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        # Inset the text viewport while keeping scrollbars at the window edge.
-        self.setViewportMargins(46, 30, 46, 30)
+        self.viewport().setMouseTracking(True)
+        self.viewport().installEventFilter(self)
+        # Leave room for code panels while keeping prose in its original position.
+        self.document().setDocumentMargin(24)
+        self.setViewportMargins(26, 10, 26, 10)
+
+    def setExtraSelections(self, selections):  # noqa: N802 (Qt API)
+        self._spelling_selections = list(selections)
+        super().setExtraSelections(self._code_selections + self._spelling_selections)
+
+    def extraSelections(self):  # noqa: N802 (Qt API)
+        return self._spelling_selections
+
+    def schedule_code_panel_update(self):
+        self._code_update_timer.start(0)
+
+    def update_code_panels(self):
+        highlighter = getattr(self, 'highlighter', None)
+        self.code_panels = []
+        self._code_selections = []
+        self._hovered_code_panel = None
+        self.viewport().unsetCursor()
+        if highlighter is not None and highlighter.enabled:
+            opening = None
+            block = self.document().firstBlock()
+            while block.isValid():
+                if opening is None and block.userState() == 1 and re.match(
+                        r"^\s*(?:`{3,}|~{3,})", block.text()):
+                    opening = block
+                if opening is not None:
+                    self.document().documentLayout().blockBoundingRect(block)
+                    layout = block.layout()
+                    for index in range(max(1, layout.lineCount())):
+                        line = layout.lineAt(index) if layout.lineCount() else None
+                        offset = line.textStart() + (1 if line.textLength() > 1 else 0) if line else 0
+                        selection = QTextEdit.ExtraSelection()
+                        selection.cursor = QTextCursor(block)
+                        selection.cursor.setPosition(block.position() + offset)
+                        selection.format.setBackground(QColor(highlighter.theme['md_code_background']))
+                        selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                        self._code_selections.append(selection)
+                    if block.userState() == 0 or not block.next().isValid():
+                        self.code_panels.append((opening.position(), block.position()))
+                        opening = None
+                block = block.next()
+        super().setExtraSelections(self._code_selections + self._spelling_selections)
+        if highlighter is not None:
+            was_modified = self.document().isModified()
+            highlighter.sync_active_code_panel()
+            self.document().setModified(was_modified)
+        self.viewport().update()
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt API)
+        if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+            cursor = self.textCursor()
+            if not cursor.hasSelection():
+                line = cursor.block().text()
+                bullet = re.match(r"^([-*+]) ", line)
+                numbered = re.match(r"^(\d+)([.)]) ", line)
+                marker = bullet or numbered
+                if marker and cursor.positionInBlock() >= marker.end():
+                    if line == marker.group(0):
+                        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock,
+                                            QTextCursor.MoveMode.KeepAnchor)
+                        cursor.removeSelectedText()
+                    else:
+                        if numbered:
+                            number = str(int(numbered.group(1)) + 1).zfill(len(numbered.group(1)))
+                            next_marker = number + numbered.group(2) + ' '
+                        else:
+                            next_marker = bullet.group(0)
+                        cursor.insertText("\n" + next_marker)
+                    self.setTextCursor(cursor)
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802 (Qt API)
+        super().paintEvent(event)
+        highlighter = getattr(self, 'highlighter', None)
+        if highlighter is None or not highlighter.enabled:
+            return
+        painter = QPainter(self.viewport())
+        self.paint_code_panels(painter, event.rect())
+        painter.setPen(Qt.PenStyle.NoPen)
+        list_color = QColor(highlighter.theme['md_list'])
+        painter.setBrush(list_color)
+        active_block = self.textCursor().block()
+        block = self.cursorForPosition(event.rect().topLeft()).block()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            start = self.cursorRect(cursor)
+            if start.top() > event.rect().bottom():
+                break
+            line = block.text()
+            bullet = re.match(r"^[-*+] ", line)
+            numbered = re.match(r"^(\d+)[.)] ", line)
+            if (block != active_block and block.userState() != 1
+                    and (numbered or (bullet and not re.match(
+                        r"^\s*(?:[-*_]\s*){3,}$", line)))):
+                marker = numbered or bullet
+                cursor.setPosition(block.position() + marker.end())
+                end = self.cursorRect(cursor)
+                marker_area = QRectF(start.left(), start.top(),
+                                     end.left() - start.left(), start.height())
+                if numbered:
+                    painter.setPen(list_color)
+                    marker_area.setRight(marker_area.right() - 4)
+                    painter.drawText(marker_area, Qt.AlignmentFlag.AlignRight |
+                                     Qt.AlignmentFlag.AlignVCenter, numbered.group(1) + '.')
+                else:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    radius = max(3.0, self.fontMetrics().height() * 0.19)
+                    painter.drawEllipse(marker_area.center(), radius, radius)
+            block = block.next()
+        painter.end()
+
+    def code_panel_rect(self, start_position, end_position):
+        document = self.document()
+        first = QTextCursor(document.findBlock(start_position))
+        last = QTextCursor(document.findBlock(end_position))
+        last.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        top = self.cursorRect(first).top()
+        bottom = self.cursorRect(last).bottom() + 1
+        return QRectF(0, top, self.viewport().width(), bottom - top)
+
+    def code_copy_rect(self, panel):
+        return QRectF(panel.right() - 42, panel.top() + 10, 30, 30)
+
+    def code_panel_at(self, position):
+        if getattr(self, 'highlighter', None) is None or not self.highlighter.enabled:
+            return None
+        return next(((start, end) for start, end in self.code_panels
+                     if self.code_panel_rect(start, end).contains(position)), None)
+
+    def mouseMoveEvent(self, event):  # noqa: N802 (Qt API)
+        hovered = self.code_panel_at(event.position())
+        if hovered != self._hovered_code_panel:
+            self._hovered_code_panel = hovered
+            self.viewport().update()
+        if hovered and self.code_copy_rect(self.code_panel_rect(*hovered)).contains(event.position()):
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+            self.viewport().setToolTip("Copy code")
+        else:
+            self.viewport().unsetCursor()
+            self.viewport().setToolTip("")
+        super().mouseMoveEvent(event)
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt API)
+        if watched is self.viewport() and event.type() == QEvent.Type.Leave:
+            if self._hovered_code_panel is not None:
+                self._hovered_code_panel = None
+                self.viewport().update()
+            self.viewport().unsetCursor()
+            self.viewport().setToolTip("")
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt API)
+        self._copy_pressed_panel = None
+        if (event.button() == Qt.MouseButton.LeftButton
+                and getattr(self, 'highlighter', None) is not None
+                and self.highlighter.enabled):
+            panel = self.code_panel_at(event.position())
+            if panel and self.code_copy_rect(self.code_panel_rect(*panel)).contains(event.position()):
+                self._hovered_code_panel = panel
+                self._copy_pressed_panel = panel
+                self.viewport().update()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 (Qt API)
+        panel = self._copy_pressed_panel
+        self._copy_pressed_panel = None
+        if panel is not None and event.button() == Qt.MouseButton.LeftButton:
+            start, end = panel
+            if self.code_copy_rect(self.code_panel_rect(start, end)).contains(event.position()):
+                block = self.document().findBlock(start).next()
+                lines = []
+                while block.isValid() and block.position() <= end:
+                    if block.position() == end and re.match(
+                            r"^\s*(?:`{3,}|~{3,})", block.text()):
+                        break
+                    lines.append(block.text())
+                    block = block.next()
+                clipboard = QApplication.clipboard()
+                copied = '\n'.join(lines)
+                clipboard.setText(copied, QClipboard.Mode.Clipboard)
+                if clipboard.supportsSelection():
+                    clipboard.setText(copied, QClipboard.Mode.Selection)
+                self.viewport().setToolTip("")
+                QToolTip.showText(event.globalPosition().toPoint(), "Copied",
+                                  self.viewport(), self.code_copy_rect(
+                                      self.code_panel_rect(start, end)).toRect(), 1500)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paint_code_panels(self, painter, dirty):
+        highlighter = self.highlighter
+        panel_color = QColor(highlighter.theme['md_code_background'])
+        base_color = self.palette().color(QPalette.ColorRole.Base)
+        icon_color = highlighter.theme['secondary']
+        for start, end in self.code_panels:
+            panel = self.code_panel_rect(start, end)
+            if not panel.intersects(QRectF(dirty)):
+                continue
+            inset = self.document().documentMargin()
+            painter.fillRect(QRectF(panel.left(), panel.top(), inset, panel.height()), panel_color)
+            painter.fillRect(QRectF(panel.right() - inset, panel.top(),
+                                    inset, panel.height()), panel_color)
+            block = self.document().findBlock(start)
+            if panel.top() < dirty.top():
+                visible = self.cursorForPosition(dirty.topLeft()).block()
+                if visible.position() > block.position():
+                    block = visible.previous()
+            while block.isValid() and block.position() < end:
+                next_block = block.next()
+                cursor = QTextCursor(block)
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                gap_top = self.cursorRect(cursor).bottom() + 1
+                gap_bottom = self.cursorRect(QTextCursor(next_block)).top()
+                if gap_top > dirty.bottom():
+                    break
+                if gap_bottom > gap_top:
+                    painter.fillRect(QRectF(panel.left(), gap_top,
+                                            panel.width(), gap_bottom - gap_top), panel_color)
+                block = next_block
+            corners = QPainterPath()
+            corners.setFillRule(Qt.FillRule.OddEvenFill)
+            corners.addRect(panel)
+            corners.addRoundedRect(panel, 8, 8)
+            painter.fillPath(corners, base_color)
+            if (start, end) == self._hovered_code_panel:
+                icon = self.code_copy_rect(panel)
+                boxicon("copy", icon_color).render(
+                    painter, QRectF(icon.left() + 3, icon.top() + 2, 24, 24))
 
     def set_max_page_width(self, pixels: int):
         self.max_page_width = pixels
@@ -202,14 +536,15 @@ class NoteEditor(QTextEdit):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self.update_page_margins()
+        self.schedule_code_panel_update()
 
     def update_page_margins(self):
         margins = self.viewportMargins()
         available = self.viewport().width() + margins.left() + margins.right()
-        extra = max(0, available - 92 - self.max_page_width) if self.max_page_width else 0
-        left, right = 46 + extra // 2, 46 + (extra + 1) // 2
+        extra = max(0, available - 52 - self.max_page_width) if self.max_page_width else 0
+        left, right = 26 + extra // 2, 26 + (extra + 1) // 2
         if margins.left() != left or margins.right() != right:
-            self.setViewportMargins(left, 30, right, 30)
+            self.setViewportMargins(left, 10, right, 10)
 
     def set_paragraph_spacing(self, pixels: int):
         cursor = self.textCursor()
@@ -234,16 +569,23 @@ class NoteEditor(QTextEdit):
         super().insertFromMimeData(source)
 
 
-class SidePanelButton(QToolButton):
-    """Draw a right-sidebar icon using the current theme's foreground."""
+class BoxIconButton(QToolButton):
+    """Paint a bundled Boxicons SVG in the active theme color."""
+
+    def __init__(self, icon_name, parent=None):
+        super().__init__(parent)
+        self.icon_name = icon_name
 
     def paintEvent(self, event):  # noqa: N802
         super().paintEvent(event)
         painter = QPainter(self)
-        painter.setPen(self.palette().color(QPalette.ColorRole.ButtonText))
-        x, y = self.width() // 2 - 8, self.height() // 2 - 6
-        painter.drawRect(x, y, 16, 12)
-        painter.drawLine(x + 10, y, x + 10, y + 12)
+        theme = self.window().theme
+        color = theme['window'] if self.objectName() == "closeControl" and self.underMouse() else theme['text']
+        if self.icon_name == "sidebar":
+            painter.translate(self.width(), 0)
+            painter.scale(-1, 1)
+        boxicon(self.icon_name, color).render(
+            painter, QRectF((self.width() - 18) / 2, (self.height() - 18) / 2, 18, 18))
 
 
 class WindowMenuBar(QMenuBar):
@@ -342,10 +684,12 @@ class MainWindow(QMainWindow):
         self.content_splitter.setStretchFactor(0, 1)
         self.content_splitter.setStretchFactor(1, 0)
         self.content_splitter.resize(self.width(), self.height())
-        self.content_splitter.setSizes([self.width() - 246, 240])
+        panel_width = max(140, self.settings.value("heading_panel_width", 240, type=int))
+        self.content_splitter.setSizes([self.width() - panel_width - 6, panel_width])
         self.content_splitter.handle(1).setToolTip("Drag to resize the headings panel")
         root_layout.addWidget(self.content_splitter, 1)
         self.heading_panel.hide()
+        self.content_splitter.splitterMoved.connect(self.remember_heading_panel_width)
         self.headings = []
 
         status = QWidget()
@@ -363,6 +707,7 @@ class MainWindow(QMainWindow):
         self.setup_actions()
         QApplication.instance().installEventFilter(self)
         self.editor.textChanged.connect(self.on_text_changed)
+        self.editor.document().modificationChanged.connect(self.update_title)
         self.editor.files_dropped.connect(self.open_dropped)
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
@@ -503,10 +848,10 @@ class MainWindow(QMainWindow):
         controls_layout = QHBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(0)
-        self.heading_button = SidePanelButton(controls)
-        self.minimize_button = QToolButton(controls)
-        self.maximize_button = QToolButton(controls)
-        self.close_button = QToolButton(controls)
+        self.heading_button = BoxIconButton("sidebar", controls)
+        self.minimize_button = BoxIconButton("minus", controls)
+        self.maximize_button = BoxIconButton("square", controls)
+        self.close_button = BoxIconButton("x", controls)
         for button in (self.heading_button, self.minimize_button, self.maximize_button, self.close_button):
             button.setObjectName("closeControl" if button is self.close_button else "windowControl")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -517,8 +862,6 @@ class MainWindow(QMainWindow):
         self.heading_button.setToolTip("Show headings")
         self.heading_button.toggled.connect(self.set_heading_panel_open)
         self.heading_button.hide()
-        self.minimize_button.setText("−")
-        self.close_button.setText("×")
         self.minimize_button.setToolTip("Minimize")
         self.maximize_button.setToolTip("Maximize")
         self.close_button.setToolTip("Close")
@@ -537,6 +880,10 @@ class MainWindow(QMainWindow):
     def set_heading_panel_open(self, opened):
         self.heading_panel.setVisible(opened)
         self.heading_button.setToolTip("Hide headings" if opened else "Show headings")
+
+    def remember_heading_panel_width(self, _position, _index):
+        if self.heading_panel.isVisible():
+            self.settings.setValue("heading_panel_width", self.content_splitter.sizes()[1])
 
     def update_headings(self, reset=False):
         headings = []
@@ -705,7 +1052,8 @@ class MainWindow(QMainWindow):
 
     def update_maximize_button(self):
         maximized = self.isMaximized()
-        self.maximize_button.setText("❐" if maximized else "□")
+        self.maximize_button.icon_name = "windows" if maximized else "square"
+        self.maximize_button.update()
         self.maximize_button.setToolTip("Restore" if maximized else "Maximize")
 
     def toggle_maximize(self):
@@ -802,6 +1150,7 @@ class MainWindow(QMainWindow):
         self.current_file = path.resolve()
         self.highlighter.enabled = self.current_file.suffix.lower() != ".txt"
         self.highlighter.rehighlight()
+        self.editor.update_code_panels()
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
         self.editor.moveCursor(self.editor.textCursor().MoveOperation.Start)
@@ -824,6 +1173,7 @@ class MainWindow(QMainWindow):
         self.has_bom = False
         self.highlighter.enabled = True
         self.highlighter.rehighlight()
+        self.editor.update_code_panels()
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
         self.update_title()
@@ -863,6 +1213,7 @@ class MainWindow(QMainWindow):
         self.editor.document().setModified(False)
         self.highlighter.enabled = self.current_file.suffix.lower() != ".txt"
         self.highlighter.rehighlight()
+        self.editor.update_code_panels()
         self.update_title()
         self.update_status()
         self.remember_recent_file(self.current_file)
@@ -904,6 +1255,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):  # noqa: N802
         if self.confirm_discard():
+            self.settings.sync()
             event.accept()
         else:
             event.ignore()

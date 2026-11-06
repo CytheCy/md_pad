@@ -14,7 +14,7 @@ mkdir -p "$build_dir/SOURCES" dist
 tar --exclude='__pycache__' --exclude='*.pyc' \
     --transform="s,^,md-pad-$version/," -czf "$build_dir/SOURCES/md-pad-$version.tar.gz" \
     main.py themes.py spelling.py VERSION md_pad_icon.svg pad.desktop README.md CHANGELOG.md \
-    requirements.txt install.sh tests packaging
+    requirements.txt install.sh boxicons tests packaging
 rpmbuild -ba --define "_topdir $build_dir" packaging/md-pad.spec
 cp "$build_dir"/RPMS/noarch/*.rpm "$build_dir"/SRPMS/*.rpm dist/
 (cd dist && sha256sum ./*.rpm > SHA256SUMS)

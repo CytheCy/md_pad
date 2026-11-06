@@ -29,6 +29,8 @@ offline English spell checking, a heading panel, and configurable themes.
 %install
 install -d %{buildroot}%{_datadir}/%{name} %{buildroot}%{_bindir}
 install -m 644 main.py themes.py spelling.py VERSION md_pad_icon.svg %{buildroot}%{_datadir}/%{name}/
+install -d %{buildroot}%{_datadir}/%{name}/boxicons
+install -m 644 boxicons/*.svg boxicons/LICENSE %{buildroot}%{_datadir}/%{name}/boxicons/
 cat > %{buildroot}%{_bindir}/pad <<'EOF'
 #!/bin/sh
 exec /usr/bin/python3 /usr/share/md-pad/main.py "$@"

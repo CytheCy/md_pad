@@ -153,8 +153,10 @@ w.close()
             formats = block.layout().formats()
             self.assertEqual(formats[1].format.foreground().color().name().upper(), theme['md_heading'])
             block = e.document().findBlockByNumber(10)
-            bold = next(f for f in block.layout().formats() if f.start == 3)
-            self.assertEqual(bold.length, 8)  # emoji uses two Qt positions
+            marker = next(f for f in block.layout().formats() if f.start == 3)
+            bold = next(f for f in block.layout().formats() if f.start == 5)
+            self.assertEqual(marker.format.foreground().color().alpha(), 0)
+            self.assertEqual(bold.length, 4)  # emoji uses two Qt positions
             self.assertEqual(e.document().lastBlock().layout().formats(), [])
             self.assertEqual(e.toPlainText(), source)
         self.window.highlighter.enabled = False
