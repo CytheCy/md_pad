@@ -61,7 +61,7 @@ Single backticks wrap inline code, and triple backticks on separate lines fence 
 
 Type `---` on its own line for a horizontal rule. It appears as a line until you move the cursor onto it, when the editable Markdown source reappears. `***` and `___` work too.
 
-Tables with a header and a `---` delimiter row display as aligned cells with borders. Alignment markers such as `:---`, `:---:`, and `---:` control each column. Click a row to edit its Markdown source; the table view returns when you leave the row. Pipes escaped with `\|` or inside inline code stay in their cell. Tab and Shift+Tab move between cells; Tab from the last cell adds a row when needed. Enter at the end of a data row also adds a row. Empty and uneven rows remain editable, and the saved text keeps its original Markdown.
+Tables with a header and a delimiter row display as aligned cells with borders. Each delimiter cell needs at least one hyphen; alignment markers such as `:---`, `:-:`, and `--:` control each column. Click a row to edit its Markdown source; the table view returns when you leave the row. Pipes escaped with `\|` or inside inline code stay in their cell. Tab and Shift+Tab move between cells; Tab from the last cell adds a row when needed. Enter at the end of a data row also adds a row. Empty and uneven rows remain editable, and the saved text keeps its original Markdown.
 
 Use **File → Open Recent** to reopen one of your last 10 opened or saved files. The list is remembered across restarts; **Clear Recent** clears it.
 

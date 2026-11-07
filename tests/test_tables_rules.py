@@ -39,6 +39,40 @@ class TablesAndRulesTests(unittest.TestCase):
         self.assertEqual(table_cells('| Item 8 | | Unknown | |')[0],
                          [(1, 9), (10, 11), (12, 21), (22, 23)])
 
+    def test_short_delimiters_accept_alignment_but_require_a_hyphen(self):
+        self.assertEqual(table_alignment('| - | :-: | --: |'),
+                         ['left', 'center', 'right'])
+        for delimiter in ('| : | --- |', '| :: | --- |', '| | --- |',
+                          '| - - | --- |', '| --x | --- |'):
+            with self.subTest(delimiter=delimiter):
+                self.assertIsNone(table_alignment(delimiter))
+
+    def test_feature_table_with_two_hyphen_delimiter_renders_and_keeps_source(self):
+        source = ('| Feature | Status | Description |\n'
+                  '| :--- | :---: | --: |\n'
+                  '| **Headings** | Passed | Supports `#` through `######` |\n'
+                  '| **Bold & Italic** | Passed | Supports `**bold**` and `*italic*` |\n'
+                  '| `Inline Code` | Pending | Renders monospaced code blocks |\n'
+                  '| [Links](https://example.com) | Failed | Hyperlink parsing needs work |')
+        self.editor.setPlainText(source)
+        self.app.processEvents()
+        document = self.editor.document()
+        document.setModified(False)
+        undo_steps = document.availableUndoSteps()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(6)],
+                         [2, 3, 4, 4, 4, 4])
+        self.assertEqual(len(self.editor.table_regions), 1)
+        _, alignment, rows = self.editor.table_regions[0]
+        self.assertEqual(alignment, ['left', 'center', 'right'])
+        self.assertEqual(len(rows), 5)
+        self.assertEqual([docs[0].toPlainText() for _, docs in rows],
+                         ['Feature', 'Headings', 'Bold & Italic', 'Inline Code', 'Links'])
+        # Exercise the painter as well as recognition and cell parsing.
+        self.assertFalse(self.editor.viewport().grab().isNull())
+        self.assertEqual(self.editor.toPlainText(), source)
+        self.assertFalse(document.isModified())
+        self.assertEqual(document.availableUndoSteps(), undo_steps)
+
     def test_table_recognition_updates_and_preserves_source(self):
         source = ('| Name | Description | Status | Price |\n'
                   '|:-----|:-----------|:------:|------:|\n'

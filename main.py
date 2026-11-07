@@ -177,7 +177,7 @@ def table_alignment(line: str):
     alignment = []
     for start, end in cells:
         marker = line[start:end].strip()
-        if not re.fullmatch(r':?-{3,}:?', marker):
+        if not re.fullmatch(r':?-+:?', marker):
             return None
         alignment.append('center' if marker.startswith(':') and marker.endswith(':')
                          else 'right' if marker.endswith(':') else 'left')
