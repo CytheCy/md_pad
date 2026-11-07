@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMenuBar,
     QMessageBox,
     QSpinBox,
@@ -197,6 +198,15 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             editor.cursorPositionChanged.connect(self.update_active_block)
             editor.textChanged.connect(editor.schedule_code_panel_update)
         self.update_colors(theme)
+
+    def rehighlight(self):
+        super().rehighlight()
+        # A full highlight can clear offscreen block layouts without Qt
+        # invalidating their cached heights. Reflow the whole document so
+        # later paragraphs retain their height and remain scrollable.
+        document = self.document()
+        if document is not None:
+            document.markContentsDirty(0, document.characterCount())
 
     def update_active_block(self):
         block = self.editor.textCursor().block()
@@ -1316,7 +1326,9 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def setup_actions(self):
-        menu = self.menuBar().addMenu("File")
+        self.file_menu = QMenu("File", self.menuBar())
+        self.menuBar().addMenu(self.file_menu)
+        menu = self.file_menu
         actions = [
             ("New", QKeySequence.StandardKey.New, self.new_file),
             ("Open…", QKeySequence.StandardKey.Open, self.choose_file),
@@ -1330,7 +1342,8 @@ class MainWindow(QMainWindow):
             menu.addAction(action)
             self.addAction(action)
             if shortcut == QKeySequence.StandardKey.Open:
-                self.recent_menu = menu.addMenu("Open Recent")
+                self.recent_menu = QMenu("Open Recent", menu)
+                menu.addMenu(self.recent_menu)
                 self.recent_menu.aboutToShow.connect(self.update_recent_menu)
                 self.update_recent_menu()
         menu.addSeparator()
@@ -1357,7 +1370,9 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         menu.addAction(quit_action)
         self.addAction(quit_action)
-        settings_menu = self.menuBar().addMenu("Settings")
+        self.settings_menu = QMenu("Settings", self.menuBar())
+        self.menuBar().addMenu(self.settings_menu)
+        settings_menu = self.settings_menu
         settings_menu.addAction("Themes…", self.show_appearance)
         settings_menu.addAction("Updates…", self.show_updates)
         self.spell_check_action = QAction("Spell check (English)", self)
@@ -1387,7 +1402,9 @@ class MainWindow(QMainWindow):
         width_action = QAction("Max Page Width…", self)
         width_action.triggered.connect(self.show_max_page_width)
         settings_menu.addAction(width_action)
-        panel_menu = settings_menu.addMenu("Heading panel")
+        self.heading_panel_menu = QMenu("Heading panel", settings_menu)
+        settings_menu.addMenu(self.heading_panel_menu)
+        panel_menu = self.heading_panel_menu
         self.heading_state_actions = {}
         heading_state_group = QActionGroup(self)
         for state, label in (("narrow", "Narrow"), ("full", "Full"), ("closed", "Closed")):
