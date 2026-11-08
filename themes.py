@@ -129,6 +129,8 @@ def stylesheet(t):
         #replaceFooter QToolButton {{ padding: 5px 6px; }}
         QPushButton:hover, QToolButton:hover {{ background: {t['hover']}; border-color: {t['accent']}; }}
         QPushButton:pressed, QToolButton:pressed, QPushButton:checked {{ background: {t['selected']}; }}
+        #findFooter QToolButton:checked, #replaceFooter QToolButton:checked {{
+            background: {t['accent']}; color: {t['window']}; border-color: {t['accent']}; }}
         QPushButton:focus, QToolButton:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
             border: 1px solid {t['focus']}; }}
         QRadioButton:focus, QCheckBox:focus {{ outline: 1px solid {t['focus']}; }}
