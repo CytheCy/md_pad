@@ -86,6 +86,19 @@ class HeadingPanelTests(unittest.TestCase):
         self.assertTrue(self.editor.hasFocus())
         self.assertEqual((self.editor.toPlainText(), document.isModified(), document.availableUndoSteps()), before)
 
+    def test_click_centers_heading_in_editor(self):
+        self.editor.setPlainText('# First\n' + 'Before\n' * 60 + '## Target\n' + 'After\n' * 60)
+        self.app.processEvents()
+        item = self.window.heading_list.item(1)
+        QTest.mouseClick(self.window.heading_list.viewport(), Qt.MouseButton.LeftButton,
+                         pos=self.window.heading_list.visualItemRect(item).center())
+        self.app.processEvents()
+
+        self.assertEqual(self.editor.textCursor().block().text(), '## Target')
+        viewport_center = self.editor.viewport().height() / 2
+        heading_center = self.editor.cursorRect().center().y()
+        self.assertLessEqual(abs(heading_center - viewport_center), self.editor.cursorRect().height())
+
     def test_code_plain_text_and_file_switching(self):
         w = self.window
         source = '# First\n```md\n## Code\n```\n~~~\n# Also code\n~~~\n###### Last\n####### Invalid'

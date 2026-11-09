@@ -1534,6 +1534,9 @@ class MainWindow(QMainWindow):
         cursor.setPosition(item.data(Qt.ItemDataRole.UserRole))
         self.editor.setTextCursor(cursor)
         self.editor.ensureCursorVisible()
+        offset = self.editor.cursorRect().center().y() - self.editor.viewport().rect().center().y()
+        scroll = self.editor.verticalScrollBar()
+        scroll.setValue(scroll.value() + offset)
         self.editor.setFocus()
 
     def remove_extra_newlines(self):
