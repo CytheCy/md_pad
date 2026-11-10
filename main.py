@@ -1789,11 +1789,14 @@ class MainWindow(QMainWindow):
             return
         cursor.setPosition(block.position())
         self.editor.setTextCursor(cursor)
+        self.center_editor_cursor()
+        self.editor.setFocus()
+
+    def center_editor_cursor(self):
         self.editor.ensureCursorVisible()
         offset = self.editor.cursorRect().center().y() - self.editor.viewport().rect().center().y()
         scroll = self.editor.verticalScrollBar()
         scroll.setValue(scroll.value() + offset)
-        self.editor.setFocus()
 
     def remove_extra_newlines(self):
         document = self.editor.document()
@@ -1868,6 +1871,7 @@ class MainWindow(QMainWindow):
         self.editor.setFont(font)
         self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
         self.highlighter.rehighlight()
+        self.center_editor_cursor()
         document.setModified(was_modified)
         self.settings.setValue("font_size", self.font_size)
         self.editor.schedule_code_panel_update(full=True)

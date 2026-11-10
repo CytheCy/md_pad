@@ -76,6 +76,22 @@ class DocumentLayoutTests(unittest.TestCase):
                 self.assertEqual(self.window.font_size, points)
                 self.assert_all_paragraphs_visible()
 
+    def test_font_change_centers_cursor_in_long_note(self):
+        editor = self.window.editor
+        cursor = QTextCursor(editor.document().findBlockByNumber(65))
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        editor.setTextCursor(cursor)
+        editor.ensureCursorVisible()
+
+        for points in (24, 10, 18):
+            with self.subTest(points=points):
+                self.window.set_font_size(points)
+                QTest.qWait(350)
+                self.assertEqual(editor.textCursor().position(), cursor.position())
+                self.assertLessEqual(
+                    abs(editor.cursorRect().center().y() - editor.viewport().rect().center().y()),
+                    editor.cursorRect().height())
+
 
 if __name__ == '__main__':
     unittest.main()
