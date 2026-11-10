@@ -86,6 +86,26 @@ class CodeMarkerTests(unittest.TestCase):
         self.assertFalse(document.isModified())
         self.assertEqual(document.availableUndoSteps(), before)
 
+    def test_editing_a_fence_propagates_code_style_and_undo_restores_it(self):
+        self.editor.setPlainText('Before\n``\n# Heading\n```\nAfter')
+        self.app.processEvents()
+        document = self.editor.document()
+        cursor = QTextCursor(document.findBlockByNumber(1))
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        self.editor.setTextCursor(cursor)
+        self.editor.insertPlainText('`')
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(5)],
+                         [0, 1, 1, 0, 0])
+        self.assertEqual(self.format_at(2, 2).fontFamilies(), ['monospace'])
+        self.assertEqual(len(self.editor.code_panels), 1)
+        self.editor.undo()
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(5)],
+                         [0, 0, 0, 1, 1])
+        self.assertTrue(self.format_at(2, 2).font().bold())
+        self.assertEqual(self.editor.toPlainText(), 'Before\n``\n# Heading\n```\nAfter')
+
 
 if __name__ == '__main__':
     unittest.main()

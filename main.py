@@ -24,6 +24,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QTextBlockFormat,
+    QTextBlockUserData,
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
@@ -184,6 +185,31 @@ def table_alignment(line: str):
     return alignment
 
 
+class HeadingBlockData(QTextBlockUserData):
+    """Cached heading recognition and fence context for one source paragraph."""
+
+    def __init__(self, in_code=None, out_code=None):
+        super().__init__()
+        self.in_code = in_code
+        self.out_code = out_code
+        self.panel = None
+        self.spelling = None
+
+
+class PanelBlock:
+    """Live paragraph and reusable presentation objects for code or a table row."""
+
+    def __init__(self, block, text, state, kind):
+        self.block = block
+        self.text = text
+        self.state = state
+        self.kind = kind
+        self.code_selections = None
+        self.table_selection = None
+        self.docs = None
+        self.parity = None
+
+
 class MarkdownHighlighter(QSyntaxHighlighter):
     """Style source text in place, keeping every Markdown character editable."""
 
@@ -196,7 +222,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         if editor:
             editor.highlighter = self
             editor.cursorPositionChanged.connect(self.update_active_block)
-            editor.textChanged.connect(editor.schedule_code_panel_update)
+            editor.sourceChanged.connect(editor.schedule_code_panel_update)
         self.update_colors(theme)
 
     def rehighlight(self):
@@ -281,6 +307,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         self.setFormat(offset, count, style)
 
     def highlightBlock(self, text: str):  # noqa: N802 (Qt API)
+        self.highlight_source_block(text)
+        if self.editor is not None:
+            self.editor.record_panel_block(self.currentBlock(), text)
+
+    def highlight_source_block(self, text):
         self.block_text = text
         self.setCurrentBlockState(0)
         if not self.enabled:
@@ -402,9 +433,17 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
 class NoteEditor(QTextEdit):
     files_dropped = Signal(list)
+    sourceChanged = Signal()
+    sourceEdited = Signal(int, int, int)
 
     def __init__(self):
         super().__init__()
+        self._formatting_document = False
+        self._highlight_neighbors = []
+        self._panel_blocks = {}
+        self._panels_dirty = False
+        self._panel_full_update = True
+        self.document().contentsChange.connect(self.on_contents_change)
         self.max_page_width = 0
         self._spelling_selections = []
         self._code_selections = []
@@ -419,7 +458,7 @@ class NoteEditor(QTextEdit):
         self._pressed_link = None
         self._code_update_timer = QTimer(self)
         self._code_update_timer.setSingleShot(True)
-        self._code_update_timer.timeout.connect(self.update_code_panels)
+        self._code_update_timer.timeout.connect(self.flush_panel_update)
         self.setAcceptDrops(True)
         self.setAcceptRichText(False)
         self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
@@ -436,12 +475,36 @@ class NoteEditor(QTextEdit):
         self._spelling_selections = list(selections)
         self.refresh_extra_selections()
 
+    def block_data(self, block):
+        cache = block.userData()
+        if not isinstance(cache, HeadingBlockData):
+            cache = HeadingBlockData()
+            block.setUserData(cache)
+        return cache
+
+    def on_contents_change(self, position, removed, added):
+        # Syntax highlighting emits textChanged even when no source changed.
+        # contentsChange reports character edits separately from that display work.
+        if not self._formatting_document and (removed or added):
+            document = self.document()
+            # Qt highlights the edited range and propagates changed block states.
+            # Table recognition also looks ahead one line, so refresh the range's
+            # neighbors after Qt finishes processing the edit. QTextBlocks follow
+            # intervening edits while the zero-delay panel update is queued.
+            first = document.findBlock(position)
+            last = document.findBlock(position + added)
+            self._highlight_neighbors.extend((first.previous(), last.next()))
+            self.sourceEdited.emit(position, removed, added)
+            self.sourceChanged.emit()
+
     def setPlainText(self, text):  # noqa: N802 (Qt API)
         self._table_edit_position = None
+        self._panel_full_update = True
         super().setPlainText(text)
 
     def clear(self):
         self._table_edit_position = None
+        self._panel_full_update = True
         super().clear()
 
     def refresh_extra_selections(self):
@@ -452,95 +515,176 @@ class NoteEditor(QTextEdit):
     def extraSelections(self):  # noqa: N802 (Qt API)
         return self._spelling_selections
 
-    def schedule_code_panel_update(self):
+    def schedule_code_panel_update(self, full=False):
+        self._panel_full_update |= full
         self._code_update_timer.start(0)
 
-    def update_code_panels(self):
+    def flush_panel_update(self):
+        self.update_code_panels(full=self._panel_full_update)
+
+    def record_panel_block(self, block, text):
+        """QSyntaxHighlighter already visits changed paragraphs and state propagation."""
+        state = block.userState()
+        kind = ('table' if state in (2, 3, 4) else
+                'code' if state == 1 or block.previous().userState() == 1 else None)
+        cache = block.userData()
+        old = cache.panel if isinstance(cache, HeadingBlockData) else None
+        if kind is None:
+            if old is not None:
+                self._panel_blocks.pop(id(old), None)
+                cache.panel = None
+                self._panels_dirty = True
+            return
+        if old is not None and (old.text, old.state, old.kind) == (text, state, kind):
+            return
+        if not isinstance(cache, HeadingBlockData):
+            cache = HeadingBlockData()
+            block.setUserData(cache)
+        if old is not None:
+            self._panel_blocks.pop(id(old), None)
+        record = PanelBlock(block, text, state, kind)
+        cache.panel = record
+        self._panel_blocks[id(record)] = record
+        self._panels_dirty = True
+
+    def update_code_panels(self, full=True):
+        # An explicit rebuild also consumes any previously queued request.
+        self._code_update_timer.stop()
+        self._panel_full_update = False
         highlighter = getattr(self, 'highlighter', None)
+        neighbors, self._highlight_neighbors = self._highlight_neighbors, []
         if highlighter is not None and highlighter.enabled:
-            # A table header depends on the following delimiter line.
             was_modified = self.document().isModified()
-            highlighter.rehighlight()
+            blocks = {block.position(): block for block in neighbors if block.isValid()}
+            for position in sorted(blocks):
+                block = blocks[position]
+                if block.userState() in (2, 3, 4) or table_cells(block.text()) is not None:
+                    highlighter.rehighlightBlock(block)
             self.document().setModified(was_modified)
+        # Global appearance/layout changes explicitly rebuild presentation. Edits
+        # use records maintained by the highlighter, without walking prose blocks.
+        if highlighter is not None and highlighter.enabled and full:
+            block = self.document().firstBlock()
+            while block.isValid():
+                self.record_panel_block(block, block.text())
+                block = block.next()
+        for key, record in list(self._panel_blocks.items()):
+            cache = record.block.userData() if record.block.isValid() else None
+            owns_record = isinstance(cache, HeadingBlockData) and cache.panel is record
+            if not owns_record or highlighter is None or not highlighter.enabled:
+                if owns_record:
+                    cache.panel = None
+                del self._panel_blocks[key]
+                self._panels_dirty = True
+        records = sorted(self._panel_blocks.values(), key=lambda record: record.block.position())
+        selections_changed = full or self._panels_dirty
+        self._panels_dirty = False
         self.code_panels = []
         self._code_selections = []
         self._table_selections = []
-        self._hovered_code_panel = None
-        self.viewport().unsetCursor()
         if highlighter is not None and highlighter.enabled:
             opening = None
-            block = self.document().firstBlock()
-            while block.isValid():
-                if block.userState() in (2, 3, 4):
-                    selection = QTextEdit.ExtraSelection()
-                    selection.cursor = QTextCursor(block)
-                    shade = QColor(highlighter.theme['elevated'])
-                    if block.userState() == 4 and block.blockNumber() % 2:
-                        shade.setAlpha(110)
-                    selection.format.setBackground(shade)
-                    selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-                    self._table_selections.append(selection)
-                if opening is None and block.userState() == 1 and re.match(
-                        r"^\s*(?:`{3,}|~{3,})", block.text()):
-                    opening = block
-                if opening is not None:
-                    self.document().documentLayout().blockBoundingRect(block)
-                    layout = block.layout()
-                    for index in range(max(1, layout.lineCount())):
-                        line = layout.lineAt(index) if layout.lineCount() else None
-                        offset = line.textStart() + (1 if line.textLength() > 1 else 0) if line else 0
+            for record in records:
+                block = record.block
+                if full:
+                    record.code_selections = record.table_selection = record.docs = None
+                if record.kind == 'table':
+                    # Alternating row shading follows paragraph numbering.
+                    parity = block.blockNumber() % 2 if record.state == 4 else 0
+                    if record.table_selection is None or record.parity != parity:
                         selection = QTextEdit.ExtraSelection()
                         selection.cursor = QTextCursor(block)
-                        selection.cursor.setPosition(block.position() + offset)
-                        selection.format.setBackground(QColor(highlighter.theme['md_code_background']))
+                        shade = QColor(highlighter.theme['elevated'])
+                        if parity:
+                            shade.setAlpha(110)
+                        selection.format.setBackground(shade)
                         selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
-                        self._code_selections.append(selection)
-                    if block.userState() == 0 or not block.next().isValid():
-                        self.code_panels.append((opening.position(), block.position()))
-                        opening = None
-                block = block.next()
-            self.update_table_regions()
-        self.refresh_extra_selections()
+                        record.table_selection = selection
+                        record.parity = parity
+                        selections_changed = True
+                    self._table_selections.append(record.table_selection)
+                    continue
+                if record.code_selections is None:
+                    record.code_selections = self.code_block_selections(block)
+                    selections_changed = True
+                self._code_selections.extend(record.code_selections)
+                if opening is None and record.state == 1 and re.match(
+                        r"^\s*(?:`{3,}|~{3,})", record.text):
+                    opening = block
+                if opening is not None and (record.state == 0 or not block.next().isValid()):
+                    self.code_panels.append((opening.position(), block.position()))
+                    opening = None
+            self.update_table_regions(records)
+        else:
+            self.table_regions = []
+        if selections_changed:
+            self.refresh_extra_selections()
+        if self._hovered_code_panel not in self.code_panels:
+            self._hovered_code_panel = None
+            self.viewport().unsetCursor()
         if highlighter is not None:
             was_modified = self.document().isModified()
             highlighter.sync_active_code_panel()
             self.document().setModified(was_modified)
-        self.viewport().update()
+        if selections_changed:
+            self.viewport().update()
 
-    def update_table_regions(self):
+    def code_block_selections(self, block):
+        selections = []
+        self.document().documentLayout().blockBoundingRect(block)
+        layout = block.layout()
+        for index in range(max(1, layout.lineCount())):
+            line = layout.lineAt(index) if layout.lineCount() else None
+            offset = line.textStart() + (1 if line.textLength() > 1 else 0) if line else 0
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(block)
+            selection.cursor.setPosition(block.position() + offset)
+            selection.format.setBackground(QColor(self.highlighter.theme['md_code_background']))
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selections.append(selection)
+        return selections
+
+    def table_cell_documents(self, record):
+        docs = []
+        for start, end in table_cells(record.text)[0]:
+            cell = record.text[start:end].strip()
+            doc = QTextDocument()
+            doc.setDocumentMargin(0)
+            doc.setDefaultFont(self.font())
+            doc.setMarkdown(cell, QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
+            content = QTextCursor(doc)
+            content.select(QTextCursor.SelectionType.Document)
+            style = fmt(self.highlighter.theme['md_heading_secondary']
+                        if record.state == 2 else self.highlighter.theme['text'],
+                        bold=record.state == 2)
+            content.mergeCharFormat(style)
+            docs.append(doc)
+        return docs
+
+    def update_table_regions(self, records):
         self.table_regions = []
-        block = self.document().firstBlock()
-        while block.isValid():
-            if block.userState() != 2:
-                block = block.next()
+        index = 0
+        while index < len(records):
+            record = records[index]
+            if record.state != 2 or index + 1 >= len(records):
+                index += 1
                 continue
-            delimiter = block.next()
-            if not delimiter.isValid() or delimiter.userState() != 3:
-                block = block.next()
+            delimiter = records[index + 1]
+            if delimiter.state != 3 or record.block.next() != delimiter.block:
+                index += 1
                 continue
-            alignment = table_alignment(delimiter.text())
+            alignment = table_alignment(delimiter.text)
             rows = []
-            current = block
-            while current.isValid() and current.userState() in (2, 3, 4):
-                if current.userState() != 3:
-                    docs = []
-                    for start, end in table_cells(current.text())[0]:
-                        cell = current.text()[start:end].strip()
-                        doc = QTextDocument()
-                        doc.setDocumentMargin(0)
-                        doc.setDefaultFont(self.font())
-                        doc.setMarkdown(cell, QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
-                        content = QTextCursor(doc)
-                        content.select(QTextCursor.SelectionType.Document)
-                        style = fmt(self.highlighter.theme['md_heading_secondary']
-                                    if current.userState() == 2 else self.highlighter.theme['text'],
-                                    bold=current.userState() == 2)
-                        content.mergeCharFormat(style)
-                        docs.append(doc)
-                    rows.append((current.position(), docs))
-                current = current.next()
-            self.table_regions.append((delimiter.position(), alignment, rows))
-            block = current
+            while index < len(records) and records[index].kind == 'table':
+                current = records[index]
+                if current.state != 3:
+                    if current.docs is None:
+                        current.docs = self.table_cell_documents(current)
+                    rows.append((current.block.position(), current.docs))
+                index += 1
+                if index < len(records) and current.block.next() != records[index].block:
+                    break
+            self.table_regions.append((delimiter.block.position(), alignment, rows))
 
     def keyPressEvent(self, event):  # noqa: N802 (Qt API)
         if (getattr(self, 'highlighter', None) is not None
@@ -947,7 +1091,7 @@ class NoteEditor(QTextEdit):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self.update_page_margins()
-        self.schedule_code_panel_update()
+        self.schedule_code_panel_update(full=True)
 
     def update_page_margins(self):
         margins = self.viewportMargins()
@@ -964,9 +1108,16 @@ class NoteEditor(QTextEdit):
         block_format = QTextBlockFormat()
         block_format.setBottomMargin(pixels)
         was_modified = self.document().isModified()
-        formatting_cursor.mergeBlockFormat(block_format)
+        # Block formatting reports a contentsChange range too, but changes only
+        # presentation. Keep source consumers (headings, spelling, find) idle.
+        self._formatting_document = True
+        try:
+            formatting_cursor.mergeBlockFormat(block_format)
+        finally:
+            self._formatting_document = False
         self.document().setModified(was_modified)
         self.setTextCursor(cursor)
+        self.schedule_code_panel_update(full=True)
 
     def canInsertFromMimeData(self, source):  # noqa: N802
         return source.hasUrls() or super().canInsertFromMimeData(source)
@@ -1111,6 +1262,10 @@ class MainWindow(QMainWindow):
         self.heading_panel.hide()
         self.content_splitter.splitterMoved.connect(self.remember_heading_panel_width)
         self.headings = []
+        self._heading_blocks = []
+        self._heading_edit = None
+        self._heading_cache_valid = False
+        self._heading_mode = None
 
         self.find_footer = QWidget()
         self.find_footer.setObjectName("findFooter")
@@ -1245,7 +1400,8 @@ class MainWindow(QMainWindow):
         self.apply_theme()
         self.setup_actions()
         QApplication.instance().installEventFilter(self)
-        self.editor.textChanged.connect(self.on_text_changed)
+        self.editor.sourceEdited.connect(self.note_heading_edit)
+        self.editor.sourceChanged.connect(self.on_text_changed)
         self.editor.cursorPositionChanged.connect(self.update_find_position)
         self.editor.document().modificationChanged.connect(self.update_title)
         self.editor.files_dropped.connect(self.open_dropped)
@@ -1254,6 +1410,11 @@ class MainWindow(QMainWindow):
         if initial_file:
             self.open_file(initial_file)
         self.editor.setFocus()
+
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        if self.heading_panel.isVisible():
+            self.update_heading_panel_display()
 
     def apply_theme(self):
         app = QApplication.instance()
@@ -1494,44 +1655,139 @@ class MainWindow(QMainWindow):
         finally:
             self._resizing_heading_panel = False
 
+    def note_heading_edit(self, position, _removed, added):
+        if self.loading or self._heading_edit is not None:
+            # Loading and batched edits can replace more than the last range.
+            self._heading_cache_valid = False
+        self._heading_edit = (position, added)
+
+    def parse_heading_block(self, block, in_code):
+        text = block.text()
+        heading = None
+        out_code = in_code
+        if re.match(r"^\s*(`{3,}|~{3,})", text):
+            out_code = not in_code
+        elif not in_code:
+            match = re.match(r"^(#{1,6})\s+(.*)$", text)
+            if match:
+                title = re.sub(r"\s+#+\s*$", "", match.group(2)).strip()
+                heading = (len(match.group(1)), title or "Untitled heading")
+        # Qt owns this cache and discards it when its paragraph is deleted.
+        cache = block.userData()
+        if not isinstance(cache, HeadingBlockData):
+            cache = HeadingBlockData()
+            block.setUserData(cache)
+        cache.in_code, cache.out_code = in_code, out_code
+        return out_code, heading
+
+    def discover_headings(self, edit, full=False):
+        if not self.highlighter.enabled:
+            return [], []
+        document = self.editor.document()
+        start, added = edit if edit is not None else (0, document.characterCount())
+        block = document.firstBlock() if full else document.findBlock(start)
+        previous = block.previous().userData()
+        if (not full and block.previous().isValid()
+                and (not isinstance(previous, HeadingBlockData) or previous.out_code is None)):
+            # An unindexed predecessor cannot supply a reliable fence context.
+            full = True
+            block = document.firstBlock()
+        in_code = previous.out_code if not full and isinstance(previous, HeadingBlockData) else False
+        first_position = block.position()
+        last_position = first_position - 1
+        end = start + added
+        entries = []
+        while block.isValid():
+            cached = block.userData()
+            if (not full and block.position() > end
+                    and isinstance(cached, HeadingBlockData) and cached.in_code == in_code):
+                # Beyond the edit, unchanged incoming context makes all later
+                # cached headings valid. Fence edits propagate only as far as needed.
+                break
+            in_code, heading = self.parse_heading_block(block, in_code)
+            last_position = block.position()
+            if heading is not None:
+                entries.append((block, *heading))
+            block = block.next()
+        if not full:
+            entries.extend((old, level, title)
+                           for old, (_, level, title) in zip(self._heading_blocks, self.headings)
+                           if old.isValid() and not first_position <= old.position() <= last_position)
+            entries.sort(key=lambda entry: entry[0].position())
+        return ([(block.position(), level, title) for block, level, title in entries],
+                [block for block, _, _ in entries])
+
     def update_headings(self, reset=False):
-        headings = []
-        if self.highlighter.enabled:
-            in_code = False
-            block = self.editor.document().firstBlock()
-            while block.isValid():
-                text = block.text()
-                if re.match(r"^\s*(`{3,}|~{3,})", text):
-                    in_code = not in_code
-                elif not in_code:
-                    match = re.match(r"^(#{1,6})\s+(.*)$", text)
-                    if match:
-                        title = re.sub(r"\s+#+\s*$", "", match.group(2)).strip()
-                        headings.append((block.position(), len(match.group(1)), title or "Untitled heading"))
-                block = block.next()
+        edit, self._heading_edit = self._heading_edit, None
+        full = reset or not self._heading_cache_valid or self._heading_mode != self.highlighter.enabled
+        if edit is None and not full:
+            return
+        headings, blocks = self.discover_headings(edit, full=full)
+        self._heading_cache_valid = True
+        self._heading_mode = self.highlighter.enabled
         was_available = len(self.headings) > 1
         available = len(headings) > 1
-        if headings != self.headings or reset:
-            scroll = self.heading_list.verticalScrollBar().value()
+        # QTextBlocks follow edits in the document. Position shifts alone must
+        # not rebuild rows or resize the sidebar (and reflow the editor).
+        unchanged = (blocks == self._heading_blocks and
+                     [(level, title) for _, level, title in headings] ==
+                     [(level, title) for _, level, title in self.headings])
+        self.headings = headings
+        self._heading_blocks = blocks
+        if unchanged and not reset:
+            return
+
+        scroll = self.heading_list.verticalScrollBar().value()
+        if reset:
             self.heading_list.clear()
-            for position, level, title in headings:
-                item = QListWidgetItem("  " * (level - 1) + title if self.heading_panel_state == "full" else title[:3])
+        # Reuse rows by their live block, including when a heading is renamed.
+        existing = {}
+        for index in range(self.heading_list.count()):
+            item = self.heading_list.item(index)
+            block = item.data(Qt.ItemDataRole.UserRole)
+            if block.isValid():
+                existing[block.position()] = item
+        desired = []
+        labels_changed = reset
+        for block, (_, level, title) in zip(blocks, headings):
+            item = existing.pop(block.position(), None)
+            if item is None:
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, block)
+                labels_changed = True
+            label = "  " * (level - 1) + title if self.heading_panel_state == "full" else title[:3]
+            if item.text() != label:
+                item.setText(label)
+                labels_changed = True
+            if item.toolTip() != title:
                 item.setToolTip(title)
-                item.setData(Qt.ItemDataRole.UserRole, position)
-                self.heading_list.addItem(item)
-            self.heading_list.verticalScrollBar().setValue(0 if reset else scroll)
-            self.headings = headings
-            if available and self.heading_panel.isVisible() and not reset:
-                self.update_heading_panel_display()
+            desired.append(item)
+        # Invalid blocks belong to deleted headings and are removed too.
+        desired_ids = {id(item) for item in desired}
+        for index in reversed(range(self.heading_list.count())):
+            if id(self.heading_list.item(index)) not in desired_ids:
+                self.heading_list.takeItem(index)
+                labels_changed = True
+        for index, item in enumerate(desired):
+            if self.heading_list.item(index) is not item:
+                self.heading_list.insertItem(index, item)
+        self.heading_list.verticalScrollBar().setValue(0 if reset else scroll)
         self.heading_button.setVisible(available)
         self.heading_panel.setVisible(available and self.heading_panel_state != "closed")
         if available and (reset or not was_available):
             self.update_heading_panel_display()
+        elif labels_changed and self.heading_panel.isVisible() and self.heading_panel_state == "narrow":
+            width = self.heading_panel_compact_width()
+            if self.content_splitter.sizes()[1] != width:
+                self.resize_heading_panel(width)
         self.menuBar().position_title()
 
     def go_to_heading(self, item):
         cursor = QTextCursor(self.editor.document())
-        cursor.setPosition(item.data(Qt.ItemDataRole.UserRole))
+        block = item.data(Qt.ItemDataRole.UserRole)
+        if not block.isValid():
+            return
+        cursor.setPosition(block.position())
         self.editor.setTextCursor(cursor)
         self.editor.ensureCursorVisible()
         self.editor.setFocus()
@@ -1601,13 +1857,17 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def set_font_size(self, points: int):
+        document = self.editor.document()
+        was_modified = document.isModified()
         self.font_size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, points))
         font = self.editor.font()
         font.setPointSize(self.font_size)
         self.editor.setFont(font)
         self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
         self.highlighter.rehighlight()
+        document.setModified(was_modified)
         self.settings.setValue("font_size", self.font_size)
+        self.editor.schedule_code_panel_update(full=True)
 
     def show_paragraph_spacing(self):
         dialog = QDialog(self)
@@ -1838,6 +2098,7 @@ class MainWindow(QMainWindow):
         self.update_title()
         self.update_status()
         self.remember_recent_file(self.current_file)
+        self.editor.spelling.refresh()
         return True
 
     def save_as(self) -> bool:

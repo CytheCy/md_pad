@@ -123,6 +123,54 @@ class TablesAndRulesTests(unittest.TestCase):
         self.assertEqual(self.editor.toPlainText(),
                          '| Name | Price |\n|:---|---:|\n| One | $1 |\nAfter')
 
+    def test_delimiter_edits_refresh_header_and_following_rows(self):
+        self.editor.setPlainText('| Name | Price |\n| oops | --- |\n| One | $1 |\nAfter')
+        self.app.processEvents()
+        document = self.editor.document()
+        cursor = QTextCursor(document.findBlockByNumber(1))
+        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+        cursor.insertText('| --- | --- |')
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(4)],
+                         [2, 3, 4, 0])
+        self.assertEqual(len(self.editor.table_regions), 1)
+        self.editor.undo()
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(4)],
+                         [0, 0, 0, 0])
+        self.assertEqual(self.editor.table_regions, [])
+
+    def test_header_column_edit_refreshes_table_states(self):
+        self.editor.setPlainText('| Name | Price |\n| --- | --- |\n| One | $1 |\nAfter')
+        self.app.processEvents()
+        document = self.editor.document()
+        cursor = QTextCursor(document.firstBlock())
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        cursor.insertText(' Extra |')
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(4)],
+                         [0, 0, 0, 0])
+        self.assertEqual(self.editor.table_regions, [])
+        self.editor.undo()
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(4)],
+                         [2, 3, 4, 0])
+
+    def test_splitting_and_rejoining_delimiter_refreshes_table(self):
+        self.editor.setPlainText('| Name | Price |\n| --- | --- |\n| One | $1 |\nAfter')
+        self.app.processEvents()
+        document = self.editor.document()
+        cursor = QTextCursor(document.findBlockByNumber(1))
+        cursor.setPosition(cursor.position() + 3)
+        cursor.insertText('\n')
+        self.app.processEvents()
+        self.assertEqual(self.editor.table_regions, [])
+        cursor.deletePreviousChar()
+        self.app.processEvents()
+        self.assertEqual([document.findBlockByNumber(i).userState() for i in range(4)],
+                         [2, 3, 4, 0])
+        self.assertEqual(len(self.editor.table_regions), 1)
+
     def test_rule_is_drawn_only_when_inactive_and_disabled_mode_is_plain(self):
         source = 'Before\n---\nAfter\n```\n---\n```'
         self.editor.setPlainText(source)
