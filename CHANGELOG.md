@@ -1,3 +1,7 @@
+# MDPad v1.0.5
+
+- Continue the in-app upgrade after the administrator approves the release key.
+
 # MDPad v1.0.4
 
 - Fix the release checksum list so installed MDPad versions can verify and install updates.

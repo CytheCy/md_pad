@@ -1,5 +1,5 @@
 Name:           md-pad
-Version:        1.0.4
+Version:        1.0.5
 Release:        1%{?dist}
 Summary:        Native Markdown and plain text notepad
 # No license has been declared by the project; do not assume an open-source license.
@@ -65,6 +65,9 @@ QT_QPA_PLATFORM=offscreen %{__python3} -m unittest discover -s tests -v
 %{_datadir}/icons/hicolor/scalable/apps/md-pad.svg
 
 %changelog
+* Wed Nov 11 2026 Cy Porter <portercy@gmail.com> - 1.0.5-1
+- Advance the updater to DNF after release-key authorization completes.
+
 * Wed Nov 11 2026 Cy Porter <portercy@gmail.com> - 1.0.4-1
 - Publish checksum filenames the installed updater can match.
 - Accept checksum filenames from older releases in the updater.

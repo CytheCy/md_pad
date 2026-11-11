@@ -55,7 +55,7 @@ class Installer(QDialog):
         self.process.setArguments(args[1:])
         self.process.readyReadStandardOutput.connect(self.read_output)
         self.process.readyReadStandardError.connect(self.read_output)
-        self.process.finished.connect(self.finished)
+        self.process.finished.connect(self.on_process_finished)
         self.process.errorOccurred.connect(lambda _: self.fail(self.process.errorString()))
         self.process.start()
 
@@ -65,7 +65,7 @@ class Installer(QDialog):
             if content:
                 self.output.append(content.decode(errors="replace"))
 
-    def finished(self, code, _status):
+    def on_process_finished(self, code, _status):
         self.read_output()
         if code:
             self.fail("Authorization or package installation failed. The previous version remains installed unless DNF reports otherwise.")
