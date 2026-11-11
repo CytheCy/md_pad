@@ -23,22 +23,44 @@ class Theme:
 
 def make_theme(identifier, name, description, *, editor, sidebar, deepest,
                elevated, border, text, secondary, muted, accent, blue, green,
-               orange, red, yellow, purple, selection=None):
-    c = dict(
-        window=deepest, editor=editor, sidebar=sidebar, panel=sidebar,
-        toolbar=sidebar, dialog=sidebar, elevated=elevated,
-        text=text, secondary=secondary, disabled=muted, border=border,
-        accent=accent, hover=elevated, selected=selection or elevated,
-        active_tab=editor, inactive_tab=sidebar,
-        selection=selection or border, selection_text=text, caret=text,
-        search_match=elevated, search_current=yellow, search_text=deepest,
-        focus=accent, link=blue, success=green, warning=yellow, error=red,
-        md_heading=accent, md_heading_secondary=blue, md_bold=text,
-        md_italic=text, md_link=blue, md_code=orange, md_code_background=elevated,
-        md_quote=secondary, md_marker=secondary, md_list=accent,
-        md_checkbox=green, md_rule=secondary, md_frontmatter=purple,
-    )
+               orange, red, yellow, purple, selection=None, token_overrides=None):
+    """Resolve every semantic token from the base colors, then apply overrides."""
+    base = dict(editor=editor, sidebar=sidebar, deepest=deepest, elevated=elevated,
+                border=border, text=text, secondary=secondary, muted=muted,
+                accent=accent, blue=blue, green=green, orange=orange, red=red,
+                yellow=yellow, purple=purple)
+    c = {token: base[source] for token, source in TOKEN_DEFAULTS.items()}
+    if selection is not None:
+        c['selection'] = c['selected'] = selection
+    if token_overrides:
+        unknown = set(token_overrides) - TOKENS
+        if unknown:
+            raise ValueError(f"Unknown theme color tokens: {', '.join(sorted(unknown))}")
+        for token, color in token_overrides.items():
+            if not QColor(color).isValid():
+                raise ValueError(f'Invalid color for {token}: {color}')
+        c.update(token_overrides)
     return Theme(identifier, name, description, MappingProxyType(c))
+
+
+# Each semantic item has a base-palette fallback. A new token only needs an
+# entry here; existing themes inherit its color until they choose an override.
+TOKEN_DEFAULTS = MappingProxyType(dict(
+    window='deepest', editor='editor', sidebar='sidebar', panel='sidebar',
+    toolbar='sidebar', dialog='sidebar', elevated='elevated',
+    text='text', secondary='secondary', disabled='muted', border='border',
+    accent='accent', hover='elevated', selected='elevated',
+    active_tab='editor', inactive_tab='sidebar',
+    selection='border', selection_text='text', caret='text',
+    search_match='elevated', search_current='yellow', search_text='deepest',
+    focus='accent', link='blue', success='green', warning='yellow', error='red',
+    md_heading='accent', md_heading_secondary='blue', md_bold='text',
+    md_italic='text', md_link='blue', md_code='orange', md_code_background='elevated',
+    md_quote='secondary', md_marker='secondary', md_list='accent',
+    md_checkbox='green', md_rule='secondary', md_frontmatter='purple',
+    md_bracketed='purple',
+))
+TOKENS = frozenset(TOKEN_DEFAULTS)
 
 
 THEMES = {t.id: t for t in (
@@ -58,7 +80,6 @@ THEMES = {t.id: t for t in (
         accent='#A7C080', blue='#7FBBB3', green='#83C092', orange='#E69875',
         red='#E67E80', yellow='#DBBC7F', purple='#D699B6', selection='#3D484D'),
 )}
-TOKENS = frozenset(next(iter(THEMES.values())).colors)
 DEFAULT_THEME = 'system'
 
 

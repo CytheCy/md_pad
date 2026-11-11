@@ -429,6 +429,16 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self.source_format(match.end(2), match.end() - match.end(2), marker)
         for match in re.finditer(r"!?\[[^\]\n]+\]\([^\)\n]+\)", text):
             self.source_format(match.start(), match.end() - match.start(), fmt(self.accent))
+        # Bracketed prose has its own color, including link labels. Leave code
+        # spans and task checkboxes to their existing semantic formats.
+        for match in re.finditer(r"(?<!\\)\[[^\[\]\n]+\]", text):
+            if match.group() in ('[ ]', '[x]', '[X]'):
+                continue
+            if any(match.start() < end and start < match.end()
+                   for start, end in code_spans):
+                continue
+            self.source_format(match.start(), match.end() - match.start(),
+                               fmt(self.theme['md_bracketed']))
         if table and (self.editor is None or
                       self.editor._table_edit_position != self.currentBlock().position()):
             self.source_format(0, len(text), fmt(Qt.GlobalColor.transparent))
@@ -2100,11 +2110,15 @@ class MainWindow(QMainWindow):
         if not self.editor.document().isModified():
             return True
         name = self.current_file.name if self.current_file else "Untitled"
-        choice = QMessageBox.question(
-            self, "Unsaved changes", f"Save changes to {name}?",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save,
-        )
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.NoIcon)
+        dialog.setWindowTitle("Unsaved changes")
+        dialog.setText(f"Save changes to {name}?")
+        dialog.setStandardButtons(QMessageBox.StandardButton.Save |
+                                  QMessageBox.StandardButton.Discard |
+                                  QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Save)
+        choice = dialog.exec()
         if choice == QMessageBox.StandardButton.Cancel:
             return False
         if choice == QMessageBox.StandardButton.Save:

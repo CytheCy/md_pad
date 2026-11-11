@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from main import MainWindow
 
@@ -68,3 +68,21 @@ class FileDialogTests(unittest.TestCase):
                 self.window.choose_file()
             self.assertEqual(self.window.current_file, path)
             qt_dialog.assert_called_once()
+
+    def test_unsaved_changes_dialog_has_no_question_icon(self):
+        self.window.editor.insertPlainText('Unsaved text')
+
+        def cancel(dialog):
+            self.assertEqual(dialog.icon(), QMessageBox.Icon.NoIcon)
+            self.assertEqual(dialog.windowTitle(), 'Unsaved changes')
+            self.assertEqual(dialog.standardButtons(),
+                             QMessageBox.StandardButton.Save |
+                             QMessageBox.StandardButton.Discard |
+                             QMessageBox.StandardButton.Cancel)
+            self.assertEqual(dialog.standardButton(dialog.defaultButton()),
+                             QMessageBox.StandardButton.Save)
+            return QMessageBox.StandardButton.Cancel
+
+        with patch.object(QMessageBox, 'exec', cancel):
+            self.assertFalse(self.window.confirm_discard())
+        self.assertTrue(self.window.editor.document().isModified())

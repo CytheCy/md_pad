@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QPalette, QTextCursor
 from PySide6.QtWidgets import QApplication, QRadioButton
 
 from main import MainWindow
-from themes import THEMES, TOKENS, resolve_theme, saved_theme_id
+from themes import THEMES, TOKENS, TOKEN_DEFAULTS, make_theme, resolve_theme, saved_theme_id
 
 
 def contrast(a, b):
@@ -55,14 +55,58 @@ class ThemeTests(unittest.TestCase):
                     'active_tab', 'inactive_tab', 'selection', 'caret', 'search_match',
                     'search_current', 'focus', 'link', 'success', 'warning', 'error'}
         self.assertTrue(required <= TOKENS)
+        self.assertEqual(TOKENS, set(TOKEN_DEFAULTS))
         for theme in THEMES.values():
             self.assertEqual(set(theme.colors), TOKENS)
             self.assertTrue(all(QColor(c).isValid() for c in theme.colors.values()))
             for bg in ('editor', 'panel', 'dialog', 'elevated', 'selection'):
                 self.assertGreaterEqual(contrast(theme['text'], theme[bg]), 4.5, (theme.id, bg))
-            for token in ('secondary', 'link', 'md_marker', 'md_code', 'md_quote', 'md_heading', 'md_heading_secondary'):
+            for token in ('secondary', 'link', 'md_marker', 'md_code', 'md_quote',
+                          'md_heading', 'md_heading_secondary', 'md_bracketed'):
                 self.assertGreaterEqual(contrast(theme[token], theme['editor']), 4.5, (theme.id, token))
             self.assertGreaterEqual(contrast(theme['focus'], theme['elevated']), 3)
+
+    def test_semantic_token_defaults_and_overrides(self):
+        source = THEMES['catppuccin-mocha']
+        colors = dict(editor=source['editor'], sidebar=source['sidebar'],
+                      deepest=source['window'], elevated=source['elevated'],
+                      border=source['border'], text=source['text'],
+                      secondary=source['secondary'], muted=source['disabled'],
+                      accent=source['accent'], blue=source['link'],
+                      green=source['success'], orange=source['md_code'],
+                      red=source['error'], yellow=source['warning'],
+                      purple=source['md_frontmatter'])
+        inherited = make_theme('custom', 'Custom', '', **colors)
+        self.assertEqual(set(inherited.colors), TOKENS)
+        self.assertEqual(inherited['md_bracketed'], source['md_frontmatter'])
+        overridden = make_theme('custom', 'Custom', '', **colors,
+                                token_overrides={'md_bracketed': '#FFFFFF'})
+        self.assertEqual(overridden['md_bracketed'], '#FFFFFF')
+        self.assertEqual(overridden['md_frontmatter'], source['md_frontmatter'])
+        with self.assertRaises(ValueError):
+            make_theme('custom', 'Custom', '', **colors,
+                       token_overrides={'md_braqeted': '#FFFFFF'})
+
+    def test_bracketed_text_uses_its_token(self):
+        e = self.window.editor
+        e.setPlainText('A [note] and [link](url)\n`[code]`\n- [x] Task')
+
+        def color_at(block_number, offset):
+            block = e.document().findBlockByNumber(block_number)
+            for item in block.layout().formats():
+                if item.start <= offset < item.start + item.length:
+                    return item.format.foreground().color().name().upper()
+            return None
+
+        for theme in THEMES.values():
+            self.window.set_theme(theme.id)
+            self.app.processEvents()
+            self.assertEqual(color_at(0, 2), theme['md_bracketed'])
+            self.assertEqual(color_at(0, 7), theme['md_bracketed'])
+            self.assertEqual(color_at(0, 17), theme['md_bracketed'])
+            self.assertEqual(color_at(0, 22), theme['md_link'])
+            self.assertEqual(color_at(1, 2), theme['md_code'])
+            self.assertEqual(color_at(2, 3), theme['md_checkbox'])
 
     def test_switch_preserves_document_and_typography(self):
         e = self.window.editor
