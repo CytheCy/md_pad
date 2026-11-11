@@ -1901,12 +1901,13 @@ class MainWindow(QMainWindow):
         block = document.firstBlock()
         while block.isValid():
             text = block.text()
+            empty_heading = re.fullmatch(r"#{1,6} +", text) is not None
             for match in re.finditer(r" +", text):
                 beside_newline = (
                     (match.start() == 0 and block.previous().isValid())
                     or (match.end() == len(text) and block.next().isValid())
                 )
-                start = match.start() + (0 if beside_newline else 1)
+                start = match.start() + (0 if beside_newline and not empty_heading else 1)
                 if start < match.end():
                     # Qt cursor positions count UTF-16 units, including for emoji.
                     position = block.position() + len(text[:start].encode("utf-16-le")) // 2

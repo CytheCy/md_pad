@@ -93,6 +93,16 @@ class HeadingPanelTests(unittest.TestCase):
         self.editor.undo()
         self.assertEqual(item.text(), ' ')
 
+    def test_remove_extra_spaces_preserves_empty_heading_separator(self):
+        source = '# \n##    \n# Title  \nPlain  text  \n#######  \nEnd'
+        expected = '# \n## \n# Title\nPlain text\n#######\nEnd'
+        self.editor.setPlainText(source)
+
+        self.window.remove_extra_spaces()
+        self.assertEqual(self.editor.toPlainText(), expected)
+        self.editor.undo()
+        self.assertEqual(self.editor.toPlainText(), source)
+
     def test_click_after_edit_navigates_unicode_duplicate_heading(self):
         w = self.window
         self.editor.setPlainText('# Same\n' + '😀 body\n' * 70 + '### Same ###\nEnd')

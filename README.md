@@ -79,7 +79,7 @@ Existing installations should rerun `bash install.sh` to install the new depende
 
 Use **File → Remove Extra ↵** to collapse consecutive line breaks into a single line break throughout the note. Undo restores the removed breaks in one step.
 
-Use **File → Remove Extra Spaces** to collapse repeated spaces into one and remove spaces immediately before or after a newline throughout the note. Line breaks and tabs are preserved. Undo restores the removed spaces in one step.
+Use **File → Remove Extra Spaces** to collapse repeated spaces into one and remove spaces immediately before or after a newline throughout the note. Empty Markdown headings such as `# ` keep one space after the marker. Line breaks and tabs are preserved. Undo restores the removed spaces in one step.
 
 Each newline displays as a paragraph break with extra space after it. Adjust the gap in **Settings → Paragraph spacing…**. This changes the display only; saved files keep their original newlines.
 
