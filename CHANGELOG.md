@@ -1,3 +1,9 @@
+# MDPad v1.0.3
+
+- Use the redesigned app icon in the window, desktop launcher, and RPM installer.
+- Restore the last open file and use the native KDE file picker.
+- Improve heading navigation, themes, tables, font sizing, and editor controls.
+
 # MDPad v1.0.2
 
 - Fix the Fedora release build for the signed updater.

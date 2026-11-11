@@ -1,5 +1,5 @@
 Name:           md-pad
-Version:        1.0.2
+Version:        1.0.3
 Release:        1%{?dist}
 Summary:        Native Markdown and plain text notepad
 # No license has been declared by the project; do not assume an open-source license.
@@ -65,6 +65,10 @@ QT_QPA_PLATFORM=offscreen %{__python3} -m unittest discover -s tests -v
 %{_datadir}/icons/hicolor/scalable/apps/md-pad.svg
 
 %changelog
+* Wed Nov 11 2026 Cy Porter <portercy@gmail.com> - 1.0.3-1
+- Update the app icon and verify it in generated RPMs.
+- Improve file dialogs, last-file restoration, themes, and editor behavior.
+
 * Fri Nov 06 2026 Cy Porter <portercy@gmail.com> - 1.0.2-1
 - Fix the Fedora release build for the signed updater.
 
