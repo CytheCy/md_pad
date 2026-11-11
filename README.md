@@ -99,8 +99,9 @@ the default for existing installations.
 
 Themes preserve the document, undo history, cursor, selection, scrolling, and
 all typography preferences. Saved colors are applied before the main window is
-shown. Qt widget file dialogs are used so open/save dialogs share the palette;
-OS-owned window decorations and file-type icons remain platform controlled.
+shown. On KDE, Open uses the desktop portal's native file picker. Other
+desktops and Save As use Qt file dialogs. OS-owned window decorations and
+file-type icons remain platform controlled.
 
 `themes.py` owns stable identifiers, immutable semantic color maps, the Qt
 palette, and application stylesheets. `main.py` uses the same tokens for source

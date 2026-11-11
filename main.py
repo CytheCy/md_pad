@@ -8,12 +8,11 @@ import codecs
 from functools import lru_cache
 import os
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, QEventLoop, QObject, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -74,6 +73,62 @@ MAX_RECENT_FILES = 10
 DEFAULT_FONT_SIZE = 12
 MIN_FONT_SIZE = 6
 MAX_FONT_SIZE = 72
+
+
+class FileChooserResponse(QObject):
+    def __init__(self, loop: QEventLoop):
+        super().__init__()
+        self.loop = loop
+        self.code = None
+        self.results = {}
+
+    @Slot('uint', 'QVariantMap')
+    def response(self, code, results):
+        self.code = code
+        self.results = results
+        self.loop.quit()
+
+
+def kde_open_file(start: Path) -> tuple[bool, str]:
+    """Ask the desktop portal for KDE's system file picker.
+
+    Return whether the portal was usable and the selected local filename.
+    """
+    bus = QDBusConnection.sessionBus()
+    if not bus.isConnected():
+        return False, ''
+    chooser = QDBusInterface('org.freedesktop.portal.Desktop',
+                             '/org/freedesktop/portal/desktop',
+                             'org.freedesktop.portal.FileChooser', bus)
+    if not chooser.isValid():
+        return False, ''
+    options = {'current_folder': QByteArray(os.fsencode(start) + b'\0')}
+    reply = chooser.call('OpenFile', '', 'Open note', options)
+    if reply.type() != QDBusMessage.MessageType.ReplyMessage or not reply.arguments():
+        return False, ''
+    request_path = reply.arguments()[0].path()
+    loop = QEventLoop()
+    receiver = FileChooserResponse(loop)
+    connected = bus.connect('org.freedesktop.portal.Desktop', request_path,
+                            'org.freedesktop.portal.Request', 'Response', receiver,
+                            '1response(uint,QVariantMap)')
+    if not connected:
+        return False, ''
+    try:
+        loop.exec()
+    finally:
+        bus.disconnect('org.freedesktop.portal.Desktop', request_path,
+                       'org.freedesktop.portal.Request', 'Response', receiver,
+                       '1response(uint,QVariantMap)')
+    if receiver.code != 0:
+        return True, ''
+    uris = receiver.results.get('uris', [])
+    if hasattr(uris, 'variant'):
+        uris = uris.variant()
+    if not uris:
+        return True, ''
+    url = QUrl(uris[0])
+    return True, url.toLocalFile() if url.isLocalFile() else ''
 
 
 @lru_cache(maxsize=32)
@@ -2036,24 +2091,14 @@ class MainWindow(QMainWindow):
                 break
 
     def choose_file(self):
-        start = str(self.current_file.parent if self.current_file else Path.home())
+        start = self.current_file.parent if self.current_file else Path.home()
         if "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper().split(":"):
-            kdialog = shutil.which("kdialog")
-            if kdialog:
-                try:
-                    result = subprocess.run(
-                        [kdialog, "--title", "Open note", "--getopenfilename", start],
-                        capture_output=True, text=True,
-                    )
-                except OSError:
-                    pass
-                else:
-                    if result.returncode in (0, 1):
-                        selected = result.stdout.rstrip("\r\n") if result.returncode == 0 else ""
-                        if selected:
-                            self.open_file(Path(selected))
-                        return
-        selected, _ = QFileDialog.getOpenFileName(self, "Open note", start, FILE_FILTER)
+            available, selected = kde_open_file(start)
+            if available:
+                if selected:
+                    self.open_file(Path(selected))
+                return
+        selected, _ = QFileDialog.getOpenFileName(self, "Open note", str(start), FILE_FILTER)
         if selected:
             self.open_file(Path(selected))
 

@@ -1,7 +1,6 @@
-"""File opening uses KDE's chooser when the desktop provides it."""
+"""File opening uses the KDE portal picker when available."""
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,24 +34,22 @@ class FileDialogTests(unittest.TestCase):
         self.window.deleteLater()
         self.app.processEvents()
 
-    def test_kde_dialog_opens_selected_file(self):
+    def test_kde_portal_opens_selected_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'chosen.md'
             path.write_text('Chosen')
             with (patch.dict(os.environ, {'XDG_CURRENT_DESKTOP': 'KDE'}),
-                  patch('main.shutil.which', return_value='/usr/bin/kdialog'),
-                  patch('main.subprocess.run', return_value=subprocess.CompletedProcess([], 0, str(path) + '\n')) as run,
+                  patch('main.kde_open_file', return_value=(True, str(path))) as portal,
                   patch('main.QFileDialog.getOpenFileName') as qt_dialog):
                 self.window.choose_file()
             self.assertEqual(self.window.current_file, path)
             self.assertEqual(self.window.editor.toPlainText(), 'Chosen')
-            self.assertIn('--getopenfilename', run.call_args.args[0])
+            portal.assert_called_once_with(Path.home())
             qt_dialog.assert_not_called()
 
-    def test_kde_dialog_cancel_does_not_open_qt_dialog(self):
+    def test_kde_portal_cancel_does_not_open_qt_dialog(self):
         with (patch.dict(os.environ, {'XDG_CURRENT_DESKTOP': 'KDE'}),
-              patch('main.shutil.which', return_value='/usr/bin/kdialog'),
-              patch('main.subprocess.run', return_value=subprocess.CompletedProcess([], 1, '')),
+              patch('main.kde_open_file', return_value=(True, '')),
               patch('main.QFileDialog.getOpenFileName') as qt_dialog):
             self.window.choose_file()
         self.assertIsNone(self.window.current_file)
@@ -63,7 +60,7 @@ class FileDialogTests(unittest.TestCase):
             path = Path(directory) / 'chosen.md'
             path.write_text('Chosen')
             with (patch.dict(os.environ, {'XDG_CURRENT_DESKTOP': 'KDE'}),
-                  patch('main.shutil.which', return_value=None),
+                  patch('main.kde_open_file', return_value=(False, '')),
                   patch('main.QFileDialog.getOpenFileName', return_value=(str(path), '')) as qt_dialog):
                 self.window.choose_file()
             self.assertEqual(self.window.current_file, path)
