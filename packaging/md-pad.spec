@@ -44,6 +44,17 @@ install -Dm644 md_pad_icon.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/ap
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/pad.desktop
+cmp md_pad_icon.svg %{buildroot}%{_datadir}/%{name}/md_pad_icon.svg
+cmp md_pad_icon.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/md-pad.svg
+QT_QPA_PLATFORM=offscreen %{__python3} - <<'PY'
+from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtSvg import QSvgRenderer
+
+app = QGuiApplication([])
+icon = 'md_pad_icon.svg'
+assert QSvgRenderer(icon).isValid(), 'App icon SVG is invalid'
+assert not QIcon(icon).pixmap(64, 64).isNull(), 'App icon cannot render'
+PY
 QT_QPA_PLATFORM=offscreen %{__python3} -m unittest discover -s tests -v
 
 %files
