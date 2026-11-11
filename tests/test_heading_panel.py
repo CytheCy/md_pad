@@ -70,6 +70,29 @@ class HeadingPanelTests(unittest.TestCase):
         self.editor.undo()
         self.assertTrue(w.heading_panel.isVisible())
 
+    def test_empty_heading_has_blank_navigation_row(self):
+        w = self.window
+        self.editor.setPlainText('# First\n# \nBody')
+        self.assertTrue(w.heading_panel.isVisible())
+        self.assertEqual(w.headings[1][2], '')
+        self.assertEqual(w.heading_list.count(), 2)
+        item = w.heading_list.item(1)
+        self.assertEqual(item.text(), ' ')
+
+        w.set_heading_panel_state('full')
+        self.assertEqual(item.text(), ' ')
+        QTest.mouseClick(w.heading_list.viewport(), Qt.MouseButton.LeftButton,
+                         pos=w.heading_list.visualItemRect(item).center())
+        self.assertEqual(self.editor.textCursor().block().text(), '# ')
+
+        cursor = QTextCursor(self.editor.document().findBlockByNumber(1))
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        self.editor.setTextCursor(cursor)
+        self.editor.insertPlainText('Second')
+        self.assertEqual(item.text(), 'Second')
+        self.editor.undo()
+        self.assertEqual(item.text(), ' ')
+
     def test_click_after_edit_navigates_unicode_duplicate_heading(self):
         w = self.window
         self.editor.setPlainText('# Same\n' + '😀 body\n' * 70 + '### Same ###\nEnd')
@@ -312,7 +335,7 @@ class HeadingPanelTests(unittest.TestCase):
                 match = re.match(r'^(#{1,6})\s+(.*)$', line)
                 if match:
                     title = re.sub(r'\s+#+\s*$', '', match[2]).strip()
-                    expected.append((offset, len(match[1]), title or 'Untitled heading'))
+                    expected.append((offset, len(match[1]), title))
             offset += len(line.encode('utf-16-le')) // 2 + 1
         self.assertEqual(self.window.headings, expected)
         self.assertEqual(self.window.heading_list.count(), len(expected))

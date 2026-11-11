@@ -47,7 +47,9 @@ The installer creates a local virtual environment and adds MDPad to the KDE appl
 python3 main.py [note.md]
 ```
 
-Use **File → Open…** to open a note, or drag a file onto the editor. Markdown source stays directly editable while headings, emphasis, code, links, lists, and quotes receive visual styling. Heading `#` markers stay hidden until you click or move the cursor onto that line, and hide again when you leave it.
+Use **File → Open…** to open a note, or drag a file onto the editor. Markdown source stays directly editable while headings, emphasis, code, links, lists, and quotes receive visual styling. Heading `#` markers stay hidden until you click or move the cursor onto that line, and hide again when you leave it. Empty headings keep their `#` visible.
+
+On launch, MDPad reopens the last file you opened or saved. Opening a note through your file manager opens that note instead.
 
 Click a Markdown link's label or a web address in the text to open it in your system's default browser. Drag to select text, or hold Shift while clicking to place the cursor without opening the link. Addresses inside code spans and fenced code blocks stay as editable code.
 

@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import codecs
 from functools import lru_cache
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -363,7 +366,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                     * self.document().defaultFont().pointSizeF() / DEFAULT_FONT_SIZE)
             self.source_format(0, len(text), fmt(self.theme['md_heading'] if level <= 2 else self.theme['md_heading_secondary'], bold=True, size=size))
             marker = fmt(self.muted, size=size)
-            if self.currentBlock() != self.active_block:
+            if self.currentBlock() != self.active_block and heading.group(3).strip():
                 # Collapse the prefix visually without changing the Markdown source.
                 marker.setForeground(QColor(Qt.GlobalColor.transparent))
                 marker.setFontPointSize(0.01)
@@ -1407,8 +1410,12 @@ class MainWindow(QMainWindow):
         self.editor.files_dropped.connect(self.open_dropped)
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
-        if initial_file:
+        if initial_file is not None:
             self.open_file(initial_file)
+        else:
+            last_file = self.settings.value("last_open_file", "", type=str)
+            if last_file and Path(last_file).is_file():
+                self.open_file(Path(last_file))
         self.editor.setFocus()
 
     def showEvent(self, event):  # noqa: N802 (Qt API)
@@ -1427,6 +1434,11 @@ class MainWindow(QMainWindow):
         self.loading = True
         try:
             apply_application_theme(app, self.theme)
+            # Qt can reset the editor's widget font when the application stylesheet changes.
+            font = self.editor.font()
+            font.setPointSize(self.font_size)
+            self.editor.setFont(font)
+            self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
             self.highlighter.update_colors(self.theme)
             self.editor.spelling.color = QColor(self.theme['error'])
             self.editor.spelling.refresh()
@@ -1632,7 +1644,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("heading_panel_width", self.heading_panel_expanded_width)
 
     def heading_panel_compact_width(self):
-        labels = [title[:3] for _, _, title in self.headings]
+        labels = [title[:3] or " " for _, _, title in self.headings]
         text_width = max((self.heading_list.fontMetrics().horizontalAdvance(label)
                           for label in labels), default=0)
         margins = self.heading_panel.layout().contentsMargins()
@@ -1643,7 +1655,7 @@ class MainWindow(QMainWindow):
         expanded = self.heading_panel_state == "full"
         for item, (_, level, title) in zip(
                 (self.heading_list.item(i) for i in range(self.heading_list.count())), self.headings):
-            item.setText("  " * (level - 1) + title if expanded else title[:3])
+            item.setText("  " * (level - 1) + (title or " ") if expanded else title[:3] or " ")
         if self.heading_panel.isVisible():
             width = self.heading_panel_expanded_width if expanded else self.heading_panel_compact_width()
             self.resize_heading_panel(width)
@@ -1671,7 +1683,7 @@ class MainWindow(QMainWindow):
             match = re.match(r"^(#{1,6})\s+(.*)$", text)
             if match:
                 title = re.sub(r"\s+#+\s*$", "", match.group(2)).strip()
-                heading = (len(match.group(1)), title or "Untitled heading")
+                heading = (len(match.group(1)), title)
         # Qt owns this cache and discards it when its paragraph is deleted.
         cache = block.userData()
         if not isinstance(cache, HeadingBlockData):
@@ -1755,7 +1767,8 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, block)
                 labels_changed = True
-            label = "  " * (level - 1) + title if self.heading_panel_state == "full" else title[:3]
+            label = ("  " * (level - 1) + (title or " ")
+                     if self.heading_panel_state == "full" else title[:3] or " ")
             if item.text() != label:
                 item.setText(label)
                 labels_changed = True
@@ -2000,6 +2013,7 @@ class MainWindow(QMainWindow):
         paths = self.settings.value("recent_files", [], type=list)
         paths = [filename] + [entry for entry in paths if entry != filename]
         self.settings.setValue("recent_files", paths[:MAX_RECENT_FILES])
+        self.settings.setValue("last_open_file", filename)
 
     def clear_recent_files(self):
         self.settings.remove("recent_files")
@@ -2012,10 +2026,24 @@ class MainWindow(QMainWindow):
                 break
 
     def choose_file(self):
-        selected, _ = QFileDialog.getOpenFileName(
-            self, "Open note", str(self.current_file.parent if self.current_file else Path.home()), FILE_FILTER,
-            options=QFileDialog.Option.DontUseNativeDialog
-        )
+        start = str(self.current_file.parent if self.current_file else Path.home())
+        if "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper().split(":"):
+            kdialog = shutil.which("kdialog")
+            if kdialog:
+                try:
+                    result = subprocess.run(
+                        [kdialog, "--title", "Open note", "--getopenfilename", start],
+                        capture_output=True, text=True,
+                    )
+                except OSError:
+                    pass
+                else:
+                    if result.returncode in (0, 1):
+                        selected = result.stdout.rstrip("\r\n") if result.returncode == 0 else ""
+                        if selected:
+                            self.open_file(Path(selected))
+                        return
+        selected, _ = QFileDialog.getOpenFileName(self, "Open note", start, FILE_FILTER)
         if selected:
             self.open_file(Path(selected))
 

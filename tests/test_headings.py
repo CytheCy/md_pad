@@ -70,6 +70,30 @@ class HeadingTests(unittest.TestCase):
         for line in range(5):
             self.assertEqual(self.editor.document().findBlockByNumber(line).layout().formats(), [])
 
+    def test_empty_heading_keeps_hash_visible_when_cursor_leaves(self):
+        source = '# \nBody\n## Named'
+        self.editor.setPlainText(source)
+        self.editor.moveCursor(QTextCursor.MoveOperation.End)
+        self.app.processEvents()
+
+        empty = self.editor.document().firstBlock()
+        self.assertEqual(self.marker(0).foreground().color().alpha(), 255)
+        self.assertGreater(empty.layout().lineAt(0).cursorToX(1)[0]
+                           - empty.layout().lineAt(0).cursorToX(0)[0], 1)
+        self.assertEqual(self.editor.toPlainText(), source)
+
+        cursor = QTextCursor(empty)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+        self.editor.setTextCursor(cursor)
+        self.editor.insertPlainText('Title')
+        self.editor.moveCursor(QTextCursor.MoveOperation.End)
+        self.assertEqual(self.marker(0).foreground().color().alpha(), 0)
+
+        self.editor.undo()
+        self.editor.moveCursor(QTextCursor.MoveOperation.End)
+        self.assertEqual(self.marker(0).foreground().color().alpha(), 255)
+        self.assertEqual(self.editor.toPlainText(), source)
+
     def test_editing_and_undo_preserve_heading_source(self):
         self.editor.setPlainText('# Heading\nBody')
         self.editor.moveCursor(QTextCursor.MoveOperation.EndOfBlock)

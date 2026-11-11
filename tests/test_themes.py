@@ -103,6 +103,27 @@ class ThemeTests(unittest.TestCase):
             restored.deleteLater()
         dialog.close()
 
+    def test_switch_keeps_selected_font_size(self):
+        self.window.set_font_size(19)
+        for identifier in (*THEMES, 'system', *THEMES):
+            with self.subTest(theme=identifier):
+                self.window.set_theme(identifier)
+                self.app.processEvents()
+                self.assertEqual(self.window.font_size, 19)
+                self.assertEqual(self.window.editor.font().pointSize(), 19)
+                self.assertEqual(self.window.editor.document().defaultFont().pointSize(), 19)
+                self.assertEqual(QSettings('Pad', 'Pad').value('font_size', type=int), 19)
+
+        restored = MainWindow()
+        self.assertEqual(restored.editor.font().pointSize(), 19)
+        restored.close()
+        restored.deleteLater()
+
+        self.window.set_font_size(15)
+        self.window.set_theme('tokyo-night')
+        self.assertEqual(self.window.editor.font().pointSize(), 15)
+        self.assertEqual(QSettings('Pad', 'Pad').value('font_size', type=int), 15)
+
     def test_persistence_in_a_new_process(self):
         script = """
 import sys
