@@ -17,4 +17,4 @@ tar --exclude='__pycache__' --exclude='*.pyc' \
     requirements.txt install.sh boxicons tests packaging
 rpmbuild -ba --define "_topdir $build_dir" packaging/md-pad.spec
 cp "$build_dir"/RPMS/noarch/*.rpm "$build_dir"/SRPMS/*.rpm dist/
-(cd dist && sha256sum ./*.rpm > SHA256SUMS)
+(cd dist && sha256sum *.rpm > SHA256SUMS)

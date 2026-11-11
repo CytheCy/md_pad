@@ -12,6 +12,21 @@ import updater
 
 
 class UpdaterTests(unittest.TestCase):
+    def test_release_checksum_accepts_bare_and_legacy_paths(self):
+        name = "md-pad-1.0.3-1.fc44.noarch.rpm"
+        digest = "a" * 64
+        for prefix in ("", "./"):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(updater.release_checksum(f"{digest}  {prefix}{name}\n", name), digest)
+
+    def test_release_checksum_rejects_duplicate_and_other_files(self):
+        name = "md-pad-1.0.3-1.fc44.noarch.rpm"
+        line = f"{'a' * 64}  {name}\n"
+        for checksums in (line + line, line + line.replace("  ", "  ./"),
+                          line.replace(name, "other.rpm")):
+            with self.assertRaisesRegex(updater.UpdateError, "missing or ambiguous"):
+                updater.release_checksum(checksums, name)
+
     def test_cancelled_download_stops_before_verification(self):
         release = updater.Release("1.0.1", "1.fc44", "", 4,
             "https://github.com/CytheCy/md_pad/releases/download/v1.0.1/md-pad-1.0.1-1.fc44.noarch.rpm",

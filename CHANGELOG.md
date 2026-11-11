@@ -1,3 +1,8 @@
+# MDPad v1.0.4
+
+- Fix the release checksum list so installed MDPad versions can verify and install updates.
+- Accept checksum lists from older releases when checking future updates.
+
 # MDPad v1.0.3
 
 - Use the redesigned app icon in the window, desktop launcher, and RPM installer.

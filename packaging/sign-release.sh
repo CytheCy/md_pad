@@ -21,4 +21,4 @@ rpmkeys --dbpath "$rpmdb" --import MDPAD-RPM-KEY.asc
 for package in dist/*.rpm; do
     rpmkeys --dbpath "$rpmdb" --checksig "$package"
 done
-(cd dist && sha256sum ./*.rpm > SHA256SUMS)
+(cd dist && sha256sum *.rpm > SHA256SUMS)

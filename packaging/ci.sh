@@ -4,6 +4,17 @@ set -euo pipefail
 dnf install -y rpm-build python3-devel python3-pyside6 python3-pyspellchecker python3-rpm git \
     desktop-file-utils tar gzip
 bash packaging/build-rpm.sh
+python3 - <<'PY'
+from pathlib import Path
+from updater import release_checksum
+
+checksums = Path('dist/SHA256SUMS').read_text()
+for rpm in Path('dist').glob('*.rpm'):
+    name = rpm.name
+    assert f'  {name}\n' in checksums, f'Checksum entry must use a bare filename: {name}'
+    release_checksum(checksums, name)
+PY
+(cd dist && sha256sum -c SHA256SUMS)
 bash packaging/test-upgrade.sh
 test "$(pad --version)" = "MDPad $(cat VERSION)"
 cmp md_pad_icon.svg /usr/share/md-pad/md_pad_icon.svg

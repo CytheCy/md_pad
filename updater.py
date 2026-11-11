@@ -144,6 +144,15 @@ def verify_rpm(path: Path, release: Release, current: tuple[str, str, str]) -> N
         raise UpdateError("The RPM would not upgrade the installed package.")
 
 
+def release_checksum(checksums: str, asset_name: str) -> str:
+    # Older releases used sha256sum ./..., while newer ones use bare filenames.
+    pattern = rf"^([0-9a-fA-F]{{64}})[ \t]+\*?(?:\./)?{re.escape(asset_name)}$"
+    matches = re.findall(pattern, checksums, re.M)
+    if len(matches) != 1:
+        raise UpdateError("The release checksum is missing or ambiguous.")
+    return matches[0].lower()
+
+
 class Worker(QThread):
     checked = Signal(object, object)
     ready = Signal(str, object)
@@ -171,9 +180,7 @@ class Worker(QThread):
         release = self.release
         assert release is not None
         checksums = fetch(release.checksum_url).decode("utf-8")
-        matches = re.findall(rf"^([0-9a-fA-F]{{64}})\s+\*?{re.escape(release.asset_name)}$", checksums, re.M)
-        if len(matches) != 1:
-            raise UpdateError("The release checksum is missing or ambiguous.")
+        expected_digest = release_checksum(checksums, release.asset_name)
         directory = Path(tempfile.mkdtemp(prefix="mdpad-update-"))
         path = directory / release.asset_name
         try:
@@ -195,7 +202,7 @@ class Worker(QThread):
                         self.progress.emit(min(100, received * 100 // release.size))
             except (urllib.error.URLError, TimeoutError) as exc:
                 raise UpdateError("Download failed. Check your connection and try again.") from exc
-            if received != release.size or digest.hexdigest().lower() != matches[0].lower():
+            if received != release.size or digest.hexdigest().lower() != expected_digest:
                 raise UpdateError("RPM size or SHA-256 checksum does not match the release.")
             verify_rpm(path, release, self.current)
             self.ready.emit(str(path), release)
