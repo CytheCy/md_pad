@@ -37,6 +37,7 @@ class HeadingPanelTests(unittest.TestCase):
 
     def tearDown(self):
         self.editor.document().setModified(False)
+        self.window._saved_text = self.editor.toPlainText()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
@@ -171,6 +172,7 @@ class HeadingPanelTests(unittest.TestCase):
         self.window.heading_state_actions['closed'].trigger()
         self.assertFalse(self.window.heading_panel.isVisible())
         self.editor.document().setModified(False)
+        self.window._saved_text = self.editor.toPlainText()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()

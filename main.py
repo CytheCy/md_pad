@@ -1289,6 +1289,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         self.editor = NoteEditor()
+        self._saved_text = self.editor.toPlainText()
         self.editor.setObjectName("editor")
         self.editor.setFont(QFont("Noto Sans", self.font_size))
         self.editor.setTabStopDistance(self.editor.fontMetrics().horizontalAdvance(" ") * 4)
@@ -1475,6 +1476,7 @@ class MainWindow(QMainWindow):
         self.editor.files_dropped.connect(self.open_dropped)
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
+        self._saved_text = self.editor.toPlainText()
         if initial_file is not None:
             self.open_file(initial_file)
         else:
@@ -2125,6 +2127,7 @@ class MainWindow(QMainWindow):
         self.editor.update_code_panels()
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
+        self._saved_text = self.editor.toPlainText()
         self.editor.moveCursor(self.editor.textCursor().MoveOperation.Start)
         self.update_headings(reset=True)
         self.update_title()
@@ -2148,12 +2151,13 @@ class MainWindow(QMainWindow):
         self.editor.update_code_panels()
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
+        self._saved_text = self.editor.toPlainText()
         self.update_title()
         self.update_status()
         self.editor.setFocus()
 
     def confirm_discard(self) -> bool:
-        if not self.editor.document().isModified():
+        if not self.has_unsaved_changes():
             return True
         name = self.current_file.name if self.current_file else "Untitled"
         dialog = QMessageBox(self)
@@ -2187,6 +2191,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not save file", f"{self.current_file}\n\n{error}")
             return False
         self.editor.document().setModified(False)
+        self._saved_text = self.editor.toPlainText()
         self.highlighter.enabled = self.current_file.suffix.lower() != ".txt"
         self.highlighter.rehighlight()
         self.editor.update_code_panels()
@@ -2364,9 +2369,14 @@ class MainWindow(QMainWindow):
         cursor.endEditBlock()
         self.update_find_matches()
 
+    def has_unsaved_changes(self):
+        # Display-only formatting can reset Qt's modified flag after an edit.
+        # The source text last written to disk is the close prompt's authority.
+        return self.editor.toPlainText() != self._saved_text
+
     def update_title(self):
         name = self.current_file.name if self.current_file else "Untitled"
-        dirty = self.editor.document().isModified()
+        dirty = self.has_unsaved_changes()
         title = name + ("*" if dirty else "")
         self.title_label.setToolTip(title)
         self.menuBar().position_title()

@@ -34,6 +34,7 @@ class DocumentLayoutTests(unittest.TestCase):
 
     def tearDown(self):
         self.window.editor.document().setModified(False)
+        self.window._saved_text = self.window.editor.toPlainText()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()

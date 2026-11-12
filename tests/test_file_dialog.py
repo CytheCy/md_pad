@@ -30,6 +30,7 @@ class FileDialogTests(unittest.TestCase):
 
     def tearDown(self):
         self.window.editor.document().setModified(False)
+        self.window._saved_text = self.window.editor.toPlainText()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
@@ -83,3 +84,32 @@ class FileDialogTests(unittest.TestCase):
         with patch.object(QMessageBox, 'exec', cancel):
             self.assertFalse(self.window.confirm_discard())
         self.assertTrue(self.window.editor.document().isModified())
+
+    def test_close_prompts_when_document_flag_was_cleared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'note.md'
+            path.write_text('Original')
+            self.assertTrue(self.window.open_file(path))
+            self.window.editor.insertPlainText('Changed ')
+            self.window.editor.document().setModified(False)
+            self.window.update_title()
+            self.assertEqual(self.window.title_label.toolTip(), 'note.md*')
+
+            with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Cancel) as prompt:
+                self.assertFalse(self.window.close())
+            prompt.assert_called_once()
+            self.assertEqual(path.read_text(), 'Original')
+
+    def test_undo_to_saved_text_clears_title_and_save_resets_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'note.md'
+            path.write_text('Original')
+            self.assertTrue(self.window.open_file(path))
+            self.window.editor.insertPlainText('Changed ')
+            self.assertEqual(self.window.title_label.toolTip(), 'note.md*')
+            self.window.editor.undo()
+            self.assertEqual(self.window.title_label.toolTip(), 'note.md')
+            self.window.editor.insertPlainText('Saved ')
+            self.assertTrue(self.window.save_file())
+            self.assertEqual(self.window.title_label.toolTip(), 'note.md')
+            self.assertFalse(self.window.has_unsaved_changes())

@@ -31,6 +31,7 @@ class LastFileTests(unittest.TestCase):
     def tearDown(self):
         for window in self.windows:
             window.editor.document().setModified(False)
+            window._saved_text = window.editor.toPlainText()
             window.close()
             window.deleteLater()
         self.app.processEvents()
