@@ -7,7 +7,7 @@ A small native notepad for Markdown and plain text, designed for Fedora KDE.
 Download the `.noarch.rpm` from the [latest release](https://github.com/CytheCy/md_pad/releases/latest), then install it on Fedora 44:
 
 ```bash
-sudo dnf install ./md-pad-1.0.5-1.fc44.noarch.rpm
+sudo dnf install ./md-pad-1.0.6-1.fc44.noarch.rpm
 ```
 
 DNF installs the required dependencies. Launch **MDPad** from the application menu
@@ -165,8 +165,8 @@ asset. Existing XDG settings/data/state formats must be read compatibly; if a
 format changes, back up user files and apply a versioned migration.
 
 ```bash
-git tag -a v1.0.3 -m "MDPad v1.0.3"
-git push --atomic origin main v1.0.3
+git tag -a v1.0.6 -m "MDPad v1.0.6"
+git push --atomic origin main v1.0.6
 ```
 
 The project has not declared a license; RPM metadata records this as

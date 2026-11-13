@@ -1,3 +1,9 @@
+# MDPad v1.0.6
+
+- Remember the window's exact size, position, and maximized state, including placement against screen edges. Use XWayland when available to restore positions on Wayland desktops.
+- Fix trackpad scrolling while a Markdown line is active.
+- Keep unsaved-change detection accurate when display formatting changes Qt's modified flag.
+
 # MDPad v1.0.5
 
 - Continue the in-app upgrade after the administrator approves the release key.

@@ -1,5 +1,5 @@
 Name:           md-pad
-Version:        1.0.5
+Version:        1.0.6
 Release:        1%{?dist}
 Summary:        Native Markdown and plain text notepad
 # No license has been declared by the project; do not assume an open-source license.
@@ -65,6 +65,11 @@ QT_QPA_PLATFORM=offscreen %{__python3} -m unittest discover -s tests -v
 %{_datadir}/icons/hicolor/scalable/apps/md-pad.svg
 
 %changelog
+* Thu Nov 12 2026 Cy Porter <portercy@gmail.com> - 1.0.6-1
+- Restore exact window position, size, and maximized state, using XWayland when available.
+- Handle pixel scroll events while editing Markdown.
+- Detect unsaved changes by comparing source text with the last saved text.
+
 * Wed Nov 11 2026 Cy Porter <portercy@gmail.com> - 1.0.5-1
 - Advance the updater to DNF after release-key authorization completes.
 
