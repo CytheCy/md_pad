@@ -89,6 +89,9 @@ Use **Settings → Max Page Width…** to limit the text page width in pixels (9
 
 Use `Ctrl+N` for a new note, `Ctrl+O` to open a file, `Ctrl+S` to save, and `Ctrl+Shift+S` to save as. Unsaved changes are confirmed before closing or changing files.
 
+The window remembers its size, position, and maximized state when you close it and restores them at the next launch.
+On Wayland desktops, MDPad uses XWayland when available so it can restore the window's position. An explicit `QT_QPA_PLATFORM` setting takes precedence.
+
 ## Appearance
 
 Choose **Settings → Themes…** for **Catppuccin Mocha**, **Tokyo Night**,

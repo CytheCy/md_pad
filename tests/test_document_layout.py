@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QSettings, QTimer
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import QPoint, QPointF, QSettings, Qt, QTimer
+from PySide6.QtGui import QTextCursor, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QSpinBox
 
@@ -64,6 +64,32 @@ class DocumentLayoutTests(unittest.TestCase):
         self.window.editor.schedule_code_panel_update()
         QTest.qWait(350)
         self.assert_all_paragraphs_visible()
+
+    def test_trackpad_scrolls_while_markdown_source_is_visible(self):
+        editor = self.window.editor
+        viewport = editor.viewport()
+        point = QPoint(100, 50)
+        QTest.mouseClick(viewport, Qt.MouseButton.LeftButton, pos=point)
+        self.assertEqual(editor.textCursor().blockNumber(), 0)
+        bar = editor.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        before = bar.value()
+        event = QWheelEvent(QPointF(point), QPointF(viewport.mapToGlobal(point)),
+                            QPoint(0, -24), QPoint(0, 0), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier,
+                            Qt.ScrollPhase.ScrollUpdate, False)
+        QApplication.sendEvent(viewport, event)
+        self.assertTrue(event.isAccepted())
+        self.assertEqual(bar.value(), before + 24)
+        wheel = QWheelEvent(QPointF(point), QPointF(viewport.mapToGlobal(point)),
+                            QPoint(0, 0), QPoint(0, -120), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier,
+                            Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(viewport, wheel)
+        self.assertTrue(wheel.isAccepted())
+        self.assertGreater(bar.value(), before + 24)
+        self.assertEqual(editor.toPlainText(), self.source)
+        self.assertFalse(editor.document().isModified())
 
     def test_font_dialog_keeps_every_paragraph_and_the_end_accessible(self):
         for points in (14, 18, 10):

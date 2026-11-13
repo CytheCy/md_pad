@@ -11,7 +11,7 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, QEventLoop, QObject, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QByteArray, QEvent, QEventLoop, QObject, QRect, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtGui import (
     QAction,
@@ -991,6 +991,21 @@ class NoteEditor(QTextEdit):
         return next(((start, end) for start, end in self.code_panels
                      if self.code_panel_rect(start, end).contains(position)), None)
 
+    def wheelEvent(self, event):  # noqa: N802 (Qt API)
+        # Some trackpads deliver pixel movement without an angle delta, which
+        # QTextEdit ignores. Scroll the viewport directly for those events.
+        pixels = event.pixelDelta()
+        if not pixels.isNull():
+            if pixels.y():
+                bar = self.verticalScrollBar()
+                bar.setValue(bar.value() - pixels.y())
+            if pixels.x():
+                bar = self.horizontalScrollBar()
+                bar.setValue(bar.value() - pixels.x())
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     def mouseMoveEvent(self, event):  # noqa: N802 (Qt API)
         super().mouseMoveEvent(event)
         hovered = self.code_panel_at(event.position())
@@ -1484,6 +1499,19 @@ class MainWindow(QMainWindow):
             if last_file and Path(last_file).is_file():
                 self.open_file(Path(last_file))
         self.editor.setFocus()
+        normal = self.settings.value("window_normal_geometry", QRect(), type=QRect)
+        # Qt's restoreGeometry reserves title-bar space even for our frameless
+        # window. Keep the exact rectangle when it fits an available screen.
+        if normal.isValid() and any(screen.availableGeometry().contains(normal)
+                                    for screen in app.screens()):
+            self.setGeometry(normal)
+            if self.settings.value("window_maximized", False, type=bool):
+                self.setWindowState(Qt.WindowState.WindowMaximized)
+        else:
+            # Retain Qt's screen-change handling and support older settings.
+            geometry = self.settings.value("window_geometry", QByteArray(), type=QByteArray)
+            if not geometry.isEmpty():
+                self.restoreGeometry(geometry)
 
     def showEvent(self, event):  # noqa: N802 (Qt API)
         super().showEvent(event)
@@ -2389,6 +2417,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):  # noqa: N802
         if getattr(self, "_updating", False) or self.confirm_discard():
+            self.settings.setValue("window_geometry", self.saveGeometry())
+            self.settings.setValue("window_normal_geometry", self.normalGeometry())
+            self.settings.setValue("window_maximized", self.isMaximized())
             self.settings.sync()
             event.accept()
         else:
@@ -2400,12 +2431,21 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
 
+def configure_window_platform():
+    # Native Wayland cannot report or restore top-level window positions. Use
+    # XWayland when available, while respecting an explicit platform choice.
+    if (sys.platform.startswith('linux') and os.environ.get('WAYLAND_DISPLAY')
+            and os.environ.get('DISPLAY')):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'xcb;wayland')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="A native Markdown and text notepad")
     parser.add_argument("--version", action="version",
                         version=f"{APP_NAME} {Path(__file__).with_name('VERSION').read_text().strip()}")
     parser.add_argument("file", nargs="?", type=Path, help="note to open")
     args = parser.parse_args()
+    configure_window_platform()
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
     app.setDesktopFileName("pad.desktop")
