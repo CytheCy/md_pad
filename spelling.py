@@ -94,6 +94,7 @@ class Spelling(QObject):
         self.batch_timer.setInterval(5)
         self.batch_timer.timeout.connect(self.process_batch)
         editor.sourceEdited.connect(self.schedule)
+        editor.documentAboutToChange.connect(self.reset_document_state)
 
     @staticmethod
     def normalize(word):
@@ -159,6 +160,15 @@ class Spelling(QObject):
         self._pending_end = QTextCursor(self.editor.document())
         self._pending_end.movePosition(QTextCursor.MoveOperation.End)
         self._marked.clear()
+        self._publish_needed = True
+
+    def reset_document_state(self):
+        """Drop pending work and paragraph references before replacing a note."""
+        self.timer.stop()
+        self.cancel_batch()
+        self._pending_start = self._pending_end = None
+        self._marked.clear()
+        self._markdown = None
         self._publish_needed = True
 
     def set_enabled(self, enabled):

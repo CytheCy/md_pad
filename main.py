@@ -293,7 +293,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             document.markContentsDirty(0, document.characterCount())
 
     def update_active_block(self):
-        block = self.editor.textCursor().block()
+        if self.document() is None:
+            return
+        block = None if self.editor._cursor_dismissed else self.editor.textCursor().block()
         if block == self.active_block:
             return
         document = self.document()
@@ -301,11 +303,12 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         previous = self.active_block
         self.active_block = block
         if (self.editor._table_edit_position is not None
-                and block.position() != self.editor._table_edit_position):
+                and (block is None or block.position() != self.editor._table_edit_position)):
             self.editor._table_edit_position = None
         if previous is not None and previous.isValid():
             self.rehighlightBlock(previous)
-        self.rehighlightBlock(block)
+        if block is not None:
+            self.rehighlightBlock(block)
         self.sync_active_code_panel()
         # Rehighlighting after block-format changes can mark Qt's document dirty.
         # Cursor movement only changes the display, never the note itself.
@@ -317,8 +320,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         if not self.editor:
             return
         position = self.editor.textCursor().block().position()
-        active = next(((start, end) for start, end in self.editor.code_panels
-                       if start <= position <= end), None)
+        active = None if self.editor._cursor_dismissed else next(
+            ((start, end) for start, end in self.editor.code_panels
+             if start <= position <= end), None)
         if active == self.active_code_panel:
             return
         previous = self.active_code_panel
@@ -502,16 +506,20 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 class NoteEditor(QTextEdit):
     files_dropped = Signal(list)
     sourceChanged = Signal()
+    modificationChanged = Signal(bool)
     sourceEdited = Signal(int, int, int)
+    documentAboutToChange = Signal()
 
     def __init__(self):
         super().__init__()
         self._formatting_document = False
+        self._cursor_dismissed = False
         self._highlight_neighbors = []
         self._panel_blocks = {}
         self._panels_dirty = False
         self._panel_full_update = True
         self.document().contentsChange.connect(self.on_contents_change)
+        self.document().modificationChanged.connect(self.modificationChanged)
         self.max_page_width = 0
         self._spelling_selections = []
         self._code_selections = []
@@ -566,14 +574,63 @@ class NoteEditor(QTextEdit):
             self.sourceChanged.emit()
 
     def setPlainText(self, text):  # noqa: N802 (Qt API)
-        self._table_edit_position = None
-        self._panel_full_update = True
-        super().setPlainText(text)
+        old_document = self.document()
+        removed = old_document.characterCount() - 1
+        self.documentAboutToChange.emit()
+        old_document.contentsChange.disconnect(self.on_contents_change)
+        self.reset_document_state()
+        highlighter = getattr(self, 'highlighter', None)
+        if highlighter is not None:
+            highlighter.setParent(self)
+            highlighter.setDocument(None)
+        document = QTextDocument(self)
+        document.setDefaultFont(old_document.defaultFont())
+        document.setDocumentMargin(old_document.documentMargin())
+        document.setPlainText(text)
+        old_document.modificationChanged.disconnect(self.modificationChanged)
+        # Swap complete documents rather than deleting live paragraphs inside
+        # QTextEdit's current document while its layout and cursors are active.
+        old_document.setParent(None)
+        self.setDocument(document)
+        old_document.setParent(self)
+        document.contentsChange.connect(self.on_contents_change)
+        document.modificationChanged.connect(self.modificationChanged)
+        if highlighter is not None:
+            highlighter.setDocument(document)
+            highlighter.update_active_block()
+            highlighter.rehighlight()
+        self.sourceEdited.emit(0, removed, document.characterCount() - 1)
+        self.sourceChanged.emit()
+        # Let source consumers release old block/cursor references first.
+        old_document.deleteLater()
 
     def clear(self):
+        self.setPlainText('')
+
+    def reset_document_state(self):
+        """Release presentation state before Qt removes the old paragraphs."""
+        self._code_update_timer.stop()
+        self._highlight_neighbors.clear()
+        self._panel_blocks.clear()
+        self._panels_dirty = True
         self._table_edit_position = None
         self._panel_full_update = True
-        super().clear()
+        self.code_panels = []
+        self.table_regions = []
+        self._copy_pressed_panel = None
+        self._hovered_code_panel = None
+        self._hovered_link = False
+        self._pressed_link = None
+        self.viewport().unsetCursor()
+        highlighter = getattr(self, 'highlighter', None)
+        if highlighter is not None:
+            highlighter.active_block = None
+            highlighter.active_code_panel = None
+        self._code_selections = []
+        self._table_selections = []
+        self._find_selections = []
+        self._spelling_selections = []
+        self.refresh_extra_selections()
 
     def refresh_extra_selections(self):
         super().setExtraSelections(
@@ -859,7 +916,7 @@ class NoteEditor(QTextEdit):
         painter.setPen(QColor(highlighter.theme['md_rule']))
         inset = self.document().documentMargin()
         rule_right = self.viewport().width() - inset
-        active_block = self.textCursor().block()
+        active_block = highlighter.active_block
         block = self.cursorForPosition(event.rect().topLeft()).block()
         while block.isValid():
             cursor = QTextCursor(block)
@@ -991,6 +1048,14 @@ class NoteEditor(QTextEdit):
         return next(((start, end) for start, end in self.code_panels
                      if self.code_panel_rect(start, end).contains(position)), None)
 
+    def event(self, event):
+        # Page margins belong to the scroll area's frame, so Qt doesn't route
+        # their wheel events through the viewport's wheelEvent handler.
+        if event.type() == QEvent.Type.Wheel:
+            self.wheelEvent(event)
+            return True
+        return super().event(event)
+
     def wheelEvent(self, event):  # noqa: N802 (Qt API)
         # Some trackpads deliver pixel movement without an angle delta, which
         # QTextEdit ignores. Scroll the viewport directly for those events.
@@ -1059,6 +1124,27 @@ class NoteEditor(QTextEdit):
             self.viewport().unsetCursor()
             self.viewport().setToolTip("")
         return super().eventFilter(watched, event)
+
+    def dismiss_cursor(self):
+        """Leave the Markdown source line as well as dismissing the caret."""
+        self._cursor_dismissed = True
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.clearSelection()
+            self.setTextCursor(cursor)
+        highlighter = getattr(self, 'highlighter', None)
+        if highlighter is not None:
+            highlighter.update_active_block()
+        self.clearFocus()
+        self.viewport().update()
+
+    def focusInEvent(self, event):  # noqa: N802 (Qt API)
+        super().focusInEvent(event)
+        if self._cursor_dismissed:
+            self._cursor_dismissed = False
+            highlighter = getattr(self, 'highlighter', None)
+            if highlighter is not None:
+                highlighter.update_active_block()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt API)
         self._copy_pressed_panel = None
@@ -1485,9 +1571,10 @@ class MainWindow(QMainWindow):
         self.setup_actions()
         QApplication.instance().installEventFilter(self)
         self.editor.sourceEdited.connect(self.note_heading_edit)
+        self.editor.documentAboutToChange.connect(self.reset_heading_cache)
         self.editor.sourceChanged.connect(self.on_text_changed)
         self.editor.cursorPositionChanged.connect(self.update_find_position)
-        self.editor.document().modificationChanged.connect(self.update_title)
+        self.editor.modificationChanged.connect(self.update_title)
         self.editor.files_dropped.connect(self.open_dropped)
         self.editor.document().setModified(False)
         self.editor.document().clearUndoRedoStacks()
@@ -1761,6 +1848,11 @@ class MainWindow(QMainWindow):
             self.content_splitter.setSizes([max(280, self.content_splitter.width() - int(width) - 6), int(width)])
         finally:
             self._resizing_heading_panel = False
+
+    def reset_heading_cache(self):
+        self._heading_cache_valid = False
+        self._heading_blocks = []
+        self._heading_edit = None
 
     def note_heading_edit(self, position, _removed, added):
         if self.loading or self._heading_edit is not None:
@@ -2071,6 +2163,11 @@ class MainWindow(QMainWindow):
                 and event.button() == Qt.MouseButton.LeftButton
                 and isinstance(watched, QWidget)
                 and watched.window() is self):
+            # Blank margins and other non-focusable widgets otherwise leave
+            # QTextEdit focused, with its caret still blinking in the note.
+            if (watched is not self.editor.viewport()
+                    and not self.editor.viewport().isAncestorOf(watched)):
+                self.editor.dismiss_cursor()
             if not self.isMaximized():
                 point = self.mapFromGlobal(event.globalPosition().toPoint())
                 edge = Qt.Edge(0)
@@ -2201,7 +2298,7 @@ class MainWindow(QMainWindow):
             return False
         if choice == QMessageBox.StandardButton.Save:
             return self.save_file()
-        return True
+        return choice == QMessageBox.StandardButton.Discard
 
     def save_file(self) -> bool:
         if self.current_file is None:
