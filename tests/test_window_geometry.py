@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QRect, QSettings
+from PySide6.QtCore import QRect, QSettings, Qt
+from PySide6.QtGui import QColor
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from main import MainWindow, configure_window_platform
@@ -121,6 +123,100 @@ class WindowGeometryTests(unittest.TestCase):
             self.assertFalse(window.close())
         self.assertEqual(window.settings.value('window_geometry'), saved)
         self.assertEqual(window.settings.value('window_normal_geometry'), saved_normal)
+
+    def click_close_through_menu(self, window, menu):
+        self.assertIs(self.app.activePopupWidget(), menu)
+        # Popup menus receive even clicks outside their own rectangle.
+        position = menu.mapFromGlobal(window.close_button.mapToGlobal(
+            window.close_button.rect().center()))
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=position)
+        self.app.processEvents()
+
+    def test_close_button_works_with_each_menu_open(self):
+        for name in ('file_menu', 'settings_menu', 'recent_menu', 'heading_panel_menu'):
+            with self.subTest(menu=name):
+                window = self.open_window()
+                menu = getattr(window, name)
+                parent_menu = (window.file_menu if name == 'recent_menu' else
+                               window.settings_menu if name == 'heading_panel_menu' else None)
+                if parent_menu:
+                    parent_menu.popup(window.menuBar().mapToGlobal(
+                        window.menuBar().actionGeometry(parent_menu.menuAction()).bottomLeft()))
+                menu.popup(window.menuBar().mapToGlobal(
+                    window.menuBar().actionGeometry(window.file_menu.menuAction()).bottomLeft()))
+                self.app.processEvents()
+                with patch.object(window, 'confirm_discard', return_value=True) as confirm:
+                    self.click_close_through_menu(window, menu)
+                confirm.assert_called_once()
+                self.assertFalse(window.isVisible())
+                self.assertFalse(menu.isVisible())
+                if parent_menu:
+                    self.assertFalse(parent_menu.isVisible())
+
+    def test_close_from_menu_can_be_cancelled_for_unsaved_changes(self):
+        window = self.open_window()
+        window.editor.setPlainText('Unsaved note')
+        window.file_menu.popup(window.menuBar().mapToGlobal(
+            window.menuBar().actionGeometry(window.file_menu.menuAction()).bottomLeft()))
+        self.app.processEvents()
+        with patch.object(window, 'confirm_discard', return_value=False) as confirm:
+            self.click_close_through_menu(window, window.file_menu)
+        confirm.assert_called_once()
+        self.assertTrue(window.isVisible())
+        self.assertFalse(window.file_menu.isVisible())
+        self.assertEqual(window.editor.toPlainText(), 'Unsaved note')
+        window.editor.setPlainText('')
+
+    def test_close_hover_matches_normal_appearance_with_menus_open(self):
+        window = self.open_window()
+        button = window.close_button
+        QTest.mouseMove(window.editor, window.editor.rect().center())
+        self.app.processEvents()
+        normal = button.grab().toImage()
+        QTest.mouseMove(button, button.rect().center())
+        self.app.processEvents()
+        hovered = button.grab().toImage()
+        self.assertNotEqual(normal, hovered)
+        self.assertEqual(hovered.pixelColor(4, 4), QColor(window.theme['error']))
+
+        for name in ('file_menu', 'settings_menu', 'recent_menu', 'heading_panel_menu'):
+            with self.subTest(menu=name):
+                menu = getattr(window, name)
+                menu.popup(window.menuBar().mapToGlobal(
+                    window.menuBar().actionGeometry(window.file_menu.menuAction()).bottomLeft()))
+                self.app.processEvents()
+                QTest.mouseMove(menu, menu.rect().center())
+                self.app.processEvents()
+                self.assertFalse(button.underMouse())
+                self.assertEqual(button.grab().toImage(), normal)
+
+                position = menu.mapFromGlobal(button.mapToGlobal(button.rect().center()))
+                QTest.mouseMove(menu, position)
+                self.app.processEvents()
+                self.assertTrue(menu.isVisible())
+                self.assertTrue(button.underMouse())
+                self.assertEqual(button.grab().toImage(), hovered)
+
+                QTest.mouseMove(menu, menu.rect().center())
+                self.app.processEvents()
+                self.assertEqual(button.grab().toImage(), normal)
+                menu.close()
+                self.app.processEvents()
+                self.assertFalse(button.underMouse())
+
+        # Dismissing a menu over the close control must leave normal hover
+        # behavior working when the pointer subsequently leaves the button.
+        window.file_menu.popup(window.menuBar().mapToGlobal(
+            window.menuBar().actionGeometry(window.file_menu.menuAction()).bottomLeft()))
+        self.app.processEvents()
+        QTest.mouseMove(window.file_menu, window.file_menu.mapFromGlobal(
+            button.mapToGlobal(button.rect().center())))
+        window.file_menu.close()
+        self.app.processEvents()
+        self.assertEqual(button.grab().toImage(), hovered)
+        QTest.mouseMove(window.editor, window.editor.rect().center())
+        self.app.processEvents()
+        self.assertEqual(button.grab().toImage(), normal)
 
     def test_minimized_window_reopens_visible(self):
         window = self.open_window()

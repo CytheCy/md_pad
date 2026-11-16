@@ -1351,6 +1351,56 @@ class BoxIconButton(QToolButton):
 class WindowMenuBar(QMenuBar):
     """Allow the empty part of the menu row to move or maximize the window."""
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._popup_close_hover = False
+        QApplication.instance().installEventFilter(self)
+
+    def update_close_hover(self, position=None):
+        button = getattr(self.window(), "close_button", None)
+        if button is None:
+            return
+        position = QCursor.pos() if position is None else position
+        hovered = (button.isVisible() and button.isEnabled()
+                   and button.rect().contains(button.mapFromGlobal(position)))
+        self._popup_close_hover = hovered
+        if button.underMouse() != hovered:
+            # Use Qt's normal hover state so both the stylesheet background
+            # and the SVG icon match the appearance without a popup grab.
+            button.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, hovered)
+            button.update()
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if event.type() == QEvent.Type.MouseMove:
+            popup = QApplication.activePopupWidget()
+            # Keep tracking until the pointer leaves, even if the menu has
+            # closed: Qt may not send Leave for a hover we forwarded.
+            if (self._popup_close_hover
+                    or isinstance(popup, QMenu) and popup in self.findChildren(QMenu)):
+                self.update_close_hover(event.globalPosition().toPoint())
+        elif (event.type() in (QEvent.Type.Show, QEvent.Type.Hide)
+              and isinstance(watched, QMenu) and watched in self.findChildren(QMenu)):
+            QTimer.singleShot(0, self.update_close_hover)
+        if (event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton):
+            popup = QApplication.activePopupWidget()
+            close_button = getattr(self.window(), "close_button", None)
+            if (isinstance(popup, QMenu) and popup in self.findChildren(QMenu)
+                    and close_button is not None and close_button.isVisible()
+                    and close_button.isEnabled()
+                    and close_button.rect().contains(close_button.mapFromGlobal(
+                        event.globalPosition().toPoint()))):
+                # A popup grabs clicks outside its bounds, including the
+                # frameless window's close control. Dismiss the entire menu
+                # chain before invoking the usual close/unsaved-changes flow.
+                while isinstance(popup, QMenu):
+                    parent = popup.parentWidget()
+                    popup.close()
+                    popup = parent
+                QTimer.singleShot(0, close_button.click)
+                return True
+        return super().eventFilter(watched, event)
+
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self.position_title()
@@ -1848,12 +1898,16 @@ class MainWindow(QMainWindow):
         menu.addAction(replace_action)
         self.addAction(replace_action)
         menu.addSeparator()
-        remove_extra_action = QAction("Remove Extra ↵", self)
-        remove_extra_action.triggered.connect(self.remove_extra_newlines)
-        menu.addAction(remove_extra_action)
-        remove_spaces_action = QAction("Remove Extra Spaces", self)
-        remove_spaces_action.triggered.connect(self.remove_extra_spaces)
-        menu.addAction(remove_spaces_action)
+        cleanup_action = QAction("Remove Extra Spaces and ↵", self)
+        cleanup_action.setShortcut(QKeySequence("Ctrl+\\"))
+        cleanup_action.triggered.connect(self.remove_extra_spaces_and_newlines)
+        menu.addAction(cleanup_action)
+        self.addAction(cleanup_action)
+        remove_lists_action = QAction("Remove Bullets and Numbering", self)
+        remove_lists_action.setShortcut(QKeySequence("Ctrl+/"))
+        remove_lists_action.triggered.connect(self.remove_bullets_and_numbering)
+        menu.addAction(remove_lists_action)
+        self.addAction(remove_lists_action)
         menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
@@ -2151,6 +2205,35 @@ class MainWindow(QMainWindow):
         for position in reversed(positions):
             cursor.setPosition(position - 1)
             cursor.setPosition(position, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+        cursor.endEditBlock()
+
+    def remove_extra_spaces_and_newlines(self):
+        cursor = QTextCursor(self.editor.document())
+        cursor.beginEditBlock()
+        self.remove_extra_newlines()
+        self.remove_extra_spaces()
+        cursor.endEditBlock()
+
+    def remove_bullets_and_numbering(self):
+        document = self.editor.document()
+        ranges = []
+        block = document.firstBlock()
+        while block.isValid():
+            text = block.text()
+            marker = re.match(r"^(?:[-*+] |\d+[.)] )", text)
+            rule = re.fullmatch(r" {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})", text)
+            if marker and not rule and block.userState() != 1:
+                ranges.append((block.position(), marker.end()))
+            block = block.next()
+        if not ranges:
+            return
+
+        cursor = QTextCursor(document)
+        cursor.beginEditBlock()
+        for position, length in reversed(ranges):
+            cursor.setPosition(position)
+            cursor.setPosition(position + length, QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
         cursor.endEditBlock()
 
