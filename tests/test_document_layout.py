@@ -65,6 +65,52 @@ class DocumentLayoutTests(unittest.TestCase):
         QTest.qWait(350)
         self.assert_all_paragraphs_visible()
 
+    def test_scroll_past_end_keeps_cursor_and_source_in_document(self):
+        editor = self.window.editor
+        document = editor.document()
+        editor.moveCursor(QTextCursor.MoveOperation.End)
+        self.app.processEvents()
+        bar = editor.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self.app.processEvents()
+        height = editor.viewport().height()
+        self.assertLess(abs(editor.cursorRect().bottom() - height // 2),
+                        document.documentMargin() + editor.cursorRect().height())
+
+        # Clicking the extra space and moving down must still stop at EOF.
+        QTest.mouseClick(editor.viewport(), Qt.MouseButton.LeftButton,
+                         pos=QPoint(100, height - 20))
+        QTest.keyClick(editor, Qt.Key.Key_Down)
+        QTest.keyClick(editor, Qt.Key.Key_Right)
+        self.assertEqual(editor.textCursor().position(), len(self.source))
+        self.assertEqual(editor.toPlainText(), self.source)
+        self.assertFalse(document.isModified())
+        self.assertFalse(document.isUndoAvailable())
+
+    def test_scroll_space_updates_after_resize_edit_and_document_replacement(self):
+        editor = self.window.editor
+        for source in (self.source, 'Short note', '\n'.join(['Line'] * 30)):
+            editor.setPlainText(source)
+            editor.moveCursor(QTextCursor.MoveOperation.End)
+            QTest.keyClicks(editor, '!')
+            for height in (500, 800):
+                self.window.resize(900, height)
+                self.app.processEvents()
+                bar = editor.verticalScrollBar()
+                bar.setValue(bar.maximum())
+                self.app.processEvents()
+                end = editor.cursorRect().bottom()
+                midpoint = editor.viewport().height() // 2
+                if bar.maximum():
+                    self.assertLess(abs(end - midpoint),
+                                    editor.document().documentMargin() +
+                                    editor.cursorRect().height())
+                else:
+                    self.assertLessEqual(end, midpoint)
+                self.assertEqual(editor.toPlainText(), source + '!')
+            editor.undo()
+            self.assertEqual(editor.toPlainText(), source)
+
     def test_trackpad_scrolls_while_markdown_source_is_visible(self):
         editor = self.window.editor
         viewport = editor.viewport()

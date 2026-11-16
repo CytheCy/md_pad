@@ -30,6 +30,7 @@ class ThemeTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         QSettings.setDefaultFormat(QSettings.Format.IniFormat)
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, cls.temp.name)
+        QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, cls.temp.name)
         cls.app = QApplication.instance() or QApplication([])
 
     @classmethod
@@ -177,6 +178,7 @@ from PySide6.QtWidgets import QApplication
 from main import MainWindow
 QSettings.setDefaultFormat(QSettings.Format.IniFormat)
 QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, sys.argv[1])
+QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, sys.argv[1])
 app = QApplication([])
 w = MainWindow()
 assert w.theme_id == sys.argv[2], w.theme_id

@@ -513,6 +513,7 @@ class NoteEditor(QTextEdit):
     def __init__(self):
         super().__init__()
         self._formatting_document = False
+        self.paragraph_spacing = 0
         self._cursor_dismissed = False
         self._highlight_neighbors = []
         self._panel_blocks = {}
@@ -546,6 +547,23 @@ class NoteEditor(QTextEdit):
         # Leave room for code panels while keeping prose in its original position.
         self.document().setDocumentMargin(24)
         self.setViewportMargins(26, 10, 26, 10)
+        self._updating_scroll_range = False
+        self.verticalScrollBar().rangeChanged.connect(self.update_scroll_range)
+        self.document().documentLayout().documentSizeChanged.connect(self.update_scroll_range)
+        self.update_scroll_range()
+
+    def update_scroll_range(self, *_):
+        """Leave half a viewport of scroll space after the actual document."""
+        if self._updating_scroll_range:
+            return
+        self._updating_scroll_range = True
+        try:
+            height = self.viewport().height()
+            document_height = self.document().documentLayout().documentSize().height()
+            maximum = max(0, round(document_height) - height + height // 2)
+            self.verticalScrollBar().setRange(0, maximum)
+        finally:
+            self._updating_scroll_range = False
 
     def setExtraSelections(self, selections):  # noqa: N802 (Qt API)
         self._spelling_selections = list(selections)
@@ -592,9 +610,11 @@ class NoteEditor(QTextEdit):
         # QTextEdit's current document while its layout and cursors are active.
         old_document.setParent(None)
         self.setDocument(document)
+        document.documentLayout().documentSizeChanged.connect(self.update_scroll_range)
         old_document.setParent(self)
         document.contentsChange.connect(self.on_contents_change)
         document.modificationChanged.connect(self.modificationChanged)
+        self.set_paragraph_spacing(self.paragraph_spacing)
         if highlighter is not None:
             highlighter.setDocument(document)
             highlighter.update_active_block()
@@ -603,6 +623,7 @@ class NoteEditor(QTextEdit):
         self.sourceChanged.emit()
         # Let source consumers release old block/cursor references first.
         old_document.deleteLater()
+        self.update_scroll_range()
 
     def clear(self):
         self.setPlainText('')
@@ -1260,6 +1281,7 @@ class NoteEditor(QTextEdit):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self.update_page_margins()
+        self.update_scroll_range()
         self.schedule_code_panel_update(full=True)
 
     def update_page_margins(self):
@@ -1271,6 +1293,7 @@ class NoteEditor(QTextEdit):
             self.setViewportMargins(left, 10, right, 10)
 
     def set_paragraph_spacing(self, pixels: int):
+        self.paragraph_spacing = pixels
         cursor = self.textCursor()
         formatting_cursor = QTextCursor(self.document())
         formatting_cursor.select(QTextCursor.SelectionType.Document)
@@ -1298,6 +1321,9 @@ class NoteEditor(QTextEdit):
                 self.files_dropped.emit(paths)
                 return
         super().insertFromMimeData(source)
+        # Qt can give pasted blocks a fresh format instead of inheriting the
+        # document's paragraph margin, especially at the end of the note.
+        self.set_paragraph_spacing(self.paragraph_spacing)
 
 
 class BoxIconButton(QToolButton):
@@ -2244,7 +2270,6 @@ class MainWindow(QMainWindow):
         content = content.replace("\r\n", "\n").replace("\r", "\n")
         self.loading = True
         self.editor.setPlainText(content)
-        self.editor.set_paragraph_spacing(self.paragraph_spacing)
         self.loading = False
         self.current_file = path.resolve()
         self.highlighter.enabled = self.current_file.suffix.lower() != ".txt"
@@ -2266,7 +2291,6 @@ class MainWindow(QMainWindow):
             return
         self.loading = True
         self.editor.clear()
-        self.editor.set_paragraph_spacing(self.paragraph_spacing)
         self.loading = False
         self.current_file = None
         self.newline = "\n"

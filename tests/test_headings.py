@@ -103,3 +103,33 @@ class HeadingTests(unittest.TestCase):
         self.assertEqual(self.editor.toPlainText(), '# Heading\nBody')
         self.editor.redo()
         self.assertEqual(self.editor.toPlainText(), '# Heading changed\nBody')
+
+    def test_paragraph_spacing_survives_document_replacement_at_every_heading_level(self):
+        source = '# One\nFirst\nSecond\n## Two\nThird\nFourth\n### Three\nFifth\nSixth'
+        self.editor.set_paragraph_spacing(17)
+        self.editor.setPlainText(source)
+        self.app.processEvents()
+
+        def gaps():
+            blocks = [self.editor.document().findBlockByNumber(i) for i in range(9)]
+            self.assertTrue(all(block.blockFormat().bottomMargin() == 17 for block in blocks))
+            result = []
+            for block, next_block in zip(blocks, blocks[1:]):
+                end = QTextCursor(block)
+                end.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+                result.append(self.editor.cursorRect(QTextCursor(next_block)).top()
+                              - self.editor.cursorRect(end).bottom() - 1)
+            return result
+
+        self.assertEqual(gaps(), [17] * 8)
+        self.assertEqual(self.editor.toPlainText(), source)
+
+        self.editor.set_paragraph_spacing(6)
+        self.app.processEvents()
+        self.assertEqual([self.editor.document().findBlockByNumber(i)
+                          .blockFormat().bottomMargin() for i in range(9)], [6] * 9)
+
+        self.editor.moveCursor(QTextCursor.MoveOperation.End)
+        QTest.keyClick(self.editor, Qt.Key.Key_Return)
+        QTest.keyClicks(self.editor, 'New paragraph')
+        self.assertEqual(self.editor.document().lastBlock().blockFormat().bottomMargin(), 6)
