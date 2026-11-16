@@ -139,6 +139,8 @@ def stylesheet(t):
         #status {{ border-top: 1px solid {t['border']}; }}
         #status QLabel {{ color: {t['secondary']}; font-size: 11px; }}
         #title {{ font-size: 15px; font-weight: 600; }}
+        #documentPathPopup {{ background: {t['elevated']}; border: 1px solid {t['border']}; border-radius: 5px; }}
+        #documentPathPopup QToolButton {{ padding: 0; }}
         QMenuBar {{ border-bottom: 1px solid {t['border']}; padding: 3px 6px; }}
         QMenuBar::item {{ padding: 7px 11px; border-radius: 5px; }}
         QMenuBar::item:selected, QMenu::item:selected {{ background: {t['hover']}; }}

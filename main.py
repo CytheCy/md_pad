@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QActionGroup,
     QColor,
     QClipboard,
+    QCursor,
     QDesktopServices,
     QFont,
     QIcon,
@@ -1383,6 +1384,114 @@ class WindowMenuBar(QMenuBar):
         super().mouseDoubleClickEvent(event)
 
 
+class DocumentPathPopup(QFrame):
+    """An interactive hover card that leaves the editor's focus alone."""
+
+    def __init__(self, owner, title_label):
+        super().__init__(owner, Qt.WindowType.ToolTip)
+        self.owner = owner
+        self.title_label = title_label
+        self.path = None
+        self.setObjectName("documentPathPopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        self.path_label = QLabel(self)
+        self.path_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.path_label.setWordWrap(True)
+        layout.addWidget(self.path_label, 1)
+        self.copy_button = BoxIconButton("copy", self)
+        self.folder_button = BoxIconButton("folder-open", self)
+        for button, label in ((self.copy_button, "Copy file path"),
+                              (self.folder_button, "Open containing folder")):
+            button.setFixedSize(30, 30)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+            layout.addWidget(button)
+        self.copy_button.clicked.connect(self.copy_path)
+        self.folder_button.clicked.connect(self.open_folder)
+        self.show_timer = QTimer(self)
+        self.show_timer.setSingleShot(True)
+        self.show_timer.setInterval(350)
+        self.show_timer.timeout.connect(self.show_for_title)
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.setInterval(250)
+        self.hide_timer.timeout.connect(self.hide_if_outside)
+        title_label.installEventFilter(self)
+
+    @property
+    def theme(self):
+        return self.owner.theme
+
+    def set_path(self, path):
+        self.path = path
+        self.path_label.setText(str(path) if path else "Not saved yet")
+        self.copy_button.setEnabled(path is not None)
+        self.folder_button.setEnabled(path is not None)
+        if self.isVisible():
+            self.show_for_title()
+
+    def copy_path(self):
+        if self.path is not None:
+            QApplication.clipboard().setText(str(self.path))
+
+    def open_folder(self):
+        if self.path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.path.parent)))
+            self.dismiss()
+
+    def show_for_title(self):
+        if not self.title_label.isVisible() or not self.owner.isActiveWindow():
+            return
+        area = self.title_label.screen().availableGeometry()
+        text_width = self.path_label.fontMetrics().horizontalAdvance(self.path_label.text())
+        self.setFixedWidth(min(560, max(260, text_width + 104), area.width()))
+        self.adjustSize()
+        anchor = self.title_label.mapToGlobal(self.title_label.rect().bottomLeft())
+        x = max(area.left(), min(anchor.x() + (self.title_label.width() - self.width()) // 2,
+                                 area.right() - self.width() + 1))
+        y = min(anchor.y() + 1, area.bottom() - self.height() + 1)
+        self.move(x, max(area.top(), y))
+        self.show()
+
+    def dismiss(self):
+        self.show_timer.stop()
+        self.hide_timer.stop()
+        self.hide()
+
+    def hide_if_outside(self):
+        cursor = QCursor.pos()
+        if (not self.rect().contains(self.mapFromGlobal(cursor))
+                and not self.title_label.rect().contains(self.title_label.mapFromGlobal(cursor))):
+            self.dismiss()
+
+    def enterEvent(self, event):  # noqa: N802
+        self.hide_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self.hide_timer.start()
+        super().leaveEvent(event)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if event.type() == QEvent.Type.Enter:
+            self.hide_timer.stop()
+            if not self.isVisible():
+                self.show_timer.start()
+        elif event.type() == QEvent.Type.Leave:
+            self.show_timer.stop()
+            self.hide_timer.start()
+        elif event.type() == QEvent.Type.ToolTip:
+            return True
+        elif event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.Hide):
+            self.dismiss()
+        return super().eventFilter(watched, event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_file: Path | None = None):
         super().__init__()
@@ -1824,6 +1933,8 @@ class MainWindow(QMainWindow):
         self.title_label.setObjectName("title")
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setToolTip("Untitled")
+        self.document_path_popup = DocumentPathPopup(self, self.title_label)
+        self.document_path_popup.set_path(self.current_file)
         self.menuBar().title_label = self.title_label
         self.menuBar().position_title()
 
@@ -2169,6 +2280,19 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def eventFilter(self, watched, event):  # noqa: N802
+        popup = getattr(self, "document_path_popup", None)
+        if popup is not None:
+            if watched is self and event.type() in (
+                    QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.Hide,
+                    QEvent.Type.WindowDeactivate):
+                popup.dismiss()
+            elif event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                if popup.isVisible():
+                    popup.dismiss()
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonPress:
+                if watched is not popup and not (isinstance(watched, QWidget) and popup.isAncestorOf(watched)):
+                    popup.dismiss()
         if watched in (self.find_input, getattr(self, 'replace_search_input', None),
                        getattr(self, 'replace_input', None)) \
                 and event.type() == QEvent.Type.KeyPress:
@@ -2528,6 +2652,7 @@ class MainWindow(QMainWindow):
         dirty = self.has_unsaved_changes()
         title = name + ("*" if dirty else "")
         self.title_label.setToolTip(title)
+        self.document_path_popup.set_path(self.current_file)
         self.menuBar().position_title()
         self.setWindowTitle(("*" if dirty else "") + name + " — " + APP_NAME)
 
