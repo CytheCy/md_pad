@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QAbstractAnimation, QByteArray, QEasingCurve, QEvent, QEventLoop, QObject, QRect, QRectF,
-    QSaveFile, QSettings, Qt, QTimer, QUrl, QVariantAnimation, Signal, Slot,
+    QAbstractAnimation, QByteArray, QCoreApplication, QEasingCurve, QEvent, QEventLoop,
+    QObject, QRect, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, QVariantAnimation, Signal, Slot,
 )
 from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtGui import (
@@ -747,8 +747,12 @@ class NoteEditor(QTextEdit):
                         shade = QColor(highlighter.theme['elevated'])
                         if parity:
                             shade.setAlpha(110)
-                        selection.format.setBackground(shade)
-                        selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                        # Assign a format value so no wrapper around the
+                        # embedded ExtraSelection member survives until exit.
+                        style = QTextCharFormat()
+                        style.setBackground(shade)
+                        style.setProperty(QTextFormat.Property.FullWidthSelection, True)
+                        selection.format = style
                         record.table_selection = selection
                         record.parity = parity
                         selections_changed = True
@@ -789,8 +793,10 @@ class NoteEditor(QTextEdit):
             selection = QTextEdit.ExtraSelection()
             selection.cursor = QTextCursor(block)
             selection.cursor.setPosition(block.position() + offset)
-            selection.format.setBackground(QColor(self.highlighter.theme['md_code_background']))
-            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            style = QTextCharFormat()
+            style.setBackground(QColor(self.highlighter.theme['md_code_background']))
+            style.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selection.format = style
             selections.append(selection)
         return selections
 
@@ -2831,9 +2837,11 @@ class MainWindow(QMainWindow):
             color = QColor(self.theme['search_current'])
             if index != self.find_index:
                 color.setAlpha(100)
-            selection.format.setBackground(color)
+            style = QTextCharFormat()
+            style.setBackground(color)
             if index == self.find_index:
-                selection.format.setForeground(QColor(self.theme['search_text']))
+                style.setForeground(QColor(self.theme['search_text']))
+            selection.format = style
             selections.append(selection)
         self.editor._find_selections = selections
         self.editor.refresh_extra_selections()
@@ -2951,7 +2959,13 @@ def main() -> int:
     apply_application_theme(app, resolve_theme(saved_theme_id(QSettings('Pad', 'Pad')), app.pad_system_palette))
     window = MainWindow(args.file)
     window.show()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        # Destroy the widget tree while QApplication and Python are still
+        # alive, before interpreter finalization collects wrapper cycles.
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 if __name__ == "__main__":

@@ -192,7 +192,7 @@ class Spelling(QObject):
             self.cancel_batch()
             for record in self._marked.values():
                 for selection in record.selections:
-                    selection.format.setUnderlineColor(self.color)
+                    selection.format = self.underline_format()
             self._published_color = self.color.name()
             self._publish_needed = True
         self.process_batch()
@@ -251,12 +251,19 @@ class Spelling(QObject):
                 selection.cursor = QTextCursor(block)
                 selection.cursor.setPosition(block.position() + qt_offset)
                 selection.cursor.setPosition(block.position() + qt_offset + length, QTextCursor.MoveMode.KeepAnchor)
-                selection.format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SpellCheckUnderline)
-                selection.format.setUnderlineColor(self.color)
+                selection.format = self.underline_format()
                 selections.append(selection)
                 qt_offset += length
             yield
         return None, inline, selections
+
+    def underline_format(self):
+        # Assign a value instead of retaining a wrapper around the format
+        # embedded in ExtraSelection during cyclic garbage collection.
+        style = QTextCharFormat()
+        style.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SpellCheckUnderline)
+        style.setUnderlineColor(self.color)
+        return style
 
     def scan_pending(self):
         block = self._pending_start.block()
