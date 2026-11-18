@@ -11,7 +11,10 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, QEventLoop, QObject, QRect, QRectF, QSaveFile, QSettings, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QAbstractAnimation, QByteArray, QEasingCurve, QEvent, QEventLoop, QObject, QRect, QRectF,
+    QSaveFile, QSettings, Qt, QTimer, QUrl, QVariantAnimation, Signal, Slot,
+)
 from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtGui import (
     QAction,
@@ -1608,7 +1611,20 @@ class MainWindow(QMainWindow):
         self.heading_panel_state = self.settings.value("heading_panel_state", "narrow")
         if self.heading_panel_state not in ("narrow", "full", "closed"):
             self.heading_panel_state = "narrow"
+        self.heading_panel_auto_hide = self.settings.value("heading_panel_auto_hide", False, type=bool)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, self.heading_panel_auto_hide)
         self._resizing_heading_panel = False
+        self._heading_panel_target_visible = False
+        self.heading_panel_animation = QVariantAnimation(self)
+        self.heading_panel_animation.setDuration(750)
+        self.heading_panel_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.heading_panel_animation.valueChanged.connect(self.animate_heading_panel_width)
+        self.heading_panel_animation.finished.connect(self.finish_heading_panel_transition)
+        self.heading_panel_hide_timer = QTimer(self)
+        self.heading_panel_hide_timer.setSingleShot(True)
+        self.heading_panel_hide_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.heading_panel_hide_timer.setInterval(5000)
+        self.heading_panel_hide_timer.timeout.connect(self.hide_heading_panel_after_delay)
         self.content_splitter.setSizes([self.width() - self.heading_panel_expanded_width - 6,
                                         self.heading_panel_expanded_width])
         self.content_splitter.handle(1).setToolTip("Drag to resize the headings panel")
@@ -1949,15 +1965,29 @@ class MainWindow(QMainWindow):
         self.heading_panel_menu = QMenu("Heading panel", settings_menu)
         settings_menu.addMenu(self.heading_panel_menu)
         panel_menu = self.heading_panel_menu
+        self.heading_controls_menu = QMenu(self.menuBar())
+        self.heading_controls_hide_timer = QTimer(self)
+        self.heading_controls_hide_timer.setSingleShot(True)
+        self.heading_controls_hide_timer.setInterval(150)
+        self.heading_controls_hide_timer.timeout.connect(self.dismiss_heading_controls_if_outside)
+        self.heading_controls_menu.aboutToHide.connect(self.heading_controls_hide_timer.stop)
+        self.heading_auto_hide_action = panel_menu.addAction("Auto Hide")
+        self.heading_auto_hide_action.setCheckable(True)
+        self.heading_auto_hide_action.setChecked(self.heading_panel_auto_hide)
+        self.heading_auto_hide_action.toggled.connect(self.set_heading_panel_auto_hide)
+        self.heading_controls_menu.addAction(self.heading_auto_hide_action)
+        panel_menu.addSeparator()
+        self.heading_controls_menu.addSeparator()
         self.heading_state_actions = {}
         heading_state_group = QActionGroup(self)
-        for state, label in (("narrow", "Narrow"), ("full", "Full"), ("closed", "Closed")):
+        for state, label in (("closed", "Hide"), ("narrow", "Narrow"), ("full", "Full")):
             action = panel_menu.addAction(label)
             action.setCheckable(True)
             action.setChecked(state == self.heading_panel_state)
             action.triggered.connect(lambda checked=False, selected=state: self.set_heading_panel_state(selected))
             heading_state_group.addAction(action)
             self.heading_state_actions[state] = action
+            self.heading_controls_menu.addAction(action)
         controls = QWidget(self.menuBar())
         controls_layout = QHBoxLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -1971,9 +2001,8 @@ class MainWindow(QMainWindow):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setAutoRaise(True)
             controls_layout.addWidget(button)
-        self.heading_button.setAccessibleName("Cycle heading panel state")
-        self.heading_button.clicked.connect(self.cycle_heading_panel_state)
-        self.update_heading_button_tooltip()
+        self.heading_button.setAccessibleName("Heading panel options")
+        self.heading_button.clicked.connect(self.show_heading_controls)
         self.heading_button.hide()
         self.minimize_button.setToolTip("Minimize")
         self.maximize_button.setToolTip("Maximize")
@@ -1992,13 +2021,20 @@ class MainWindow(QMainWindow):
         self.menuBar().title_label = self.title_label
         self.menuBar().position_title()
 
-    def cycle_heading_panel_state(self):
-        states = ("narrow", "full", "closed")
-        self.set_heading_panel_state(states[(states.index(self.heading_panel_state) + 1) % len(states)])
+    def show_heading_controls(self):
+        if not self.heading_button.isVisible() or QApplication.activePopupWidget():
+            return
+        menu = self.heading_controls_menu
+        anchor = self.heading_button.mapToGlobal(self.heading_button.rect().bottomRight())
+        anchor.setX(anchor.x() - menu.sizeHint().width() + 1)
+        anchor.setY(anchor.y() + 1)
+        menu.popup(anchor)
 
-    def update_heading_button_tooltip(self):
-        next_state = {"narrow": "Full", "full": "Closed", "closed": "Narrow"}[self.heading_panel_state]
-        self.heading_button.setToolTip(f"Heading panel: {self.heading_panel_state.title()} (click for {next_state})")
+    def dismiss_heading_controls_if_outside(self):
+        cursor = QCursor.pos()
+        if not any(widget.rect().contains(widget.mapFromGlobal(cursor))
+                   for widget in (self.heading_controls_menu, self.heading_button)):
+            self.heading_controls_menu.close()
 
     def set_heading_panel_state(self, state):
         if state not in ("narrow", "full", "closed"):
@@ -2006,10 +2042,87 @@ class MainWindow(QMainWindow):
         self.heading_panel_state = state
         self.settings.setValue("heading_panel_state", state)
         self.heading_state_actions[state].setChecked(True)
-        self.update_heading_button_tooltip()
-        self.heading_panel.setVisible(state != "closed" and len(self.headings) > 1)
-        self.content_splitter.handle(1).setEnabled(state == "full")
+        self.heading_panel_hide_timer.stop()
+        self.update_heading_panel_visibility(animate=True)
+        self.content_splitter.handle(1).setEnabled(state == "full" and not self.heading_panel_is_animating())
         self.update_heading_panel_display()
+
+    def set_heading_panel_auto_hide(self, enabled):
+        self.heading_panel_auto_hide = enabled
+        self.settings.setValue("heading_panel_auto_hide", enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, enabled)
+        self.heading_panel_hide_timer.stop()
+        self.update_heading_panel_visibility(animate=True)
+
+    def heading_panel_is_animating(self):
+        return self.heading_panel_animation.state() == QAbstractAnimation.State.Running
+
+    def update_heading_panel_visibility(self, *, reveal=False, animate=False):
+        visible = (len(self.headings) > 1 and self.heading_panel_state != "closed"
+                   and (not self.heading_panel_auto_hide or reveal))
+        same_target = visible == self._heading_panel_target_visible
+        if same_target and not self.heading_panel_is_animating():
+            return
+        animation = self.heading_panel_animation
+        end_width = self.heading_panel_target_width() if visible else 1
+        if same_target and animate and animation.endValue() == end_width:
+            return
+        self._heading_panel_target_visible = visible
+        self.heading_panel_hide_timer.stop()
+        animation.stop()
+        if not animate or not self.isVisible():
+            self.finish_heading_panel_transition()
+            return
+
+        start_width = max(1, self.content_splitter.sizes()[1])
+        if start_width == end_width:
+            self.finish_heading_panel_transition()
+            return
+        self.content_splitter.handle(1).setEnabled(False)
+        self.heading_panel.show()
+        self.resize_heading_panel(start_width)
+        animation.setStartValue(start_width)
+        animation.setEndValue(end_width)
+        animation.start()
+
+    def animate_heading_panel_width(self, width):
+        # Changing the endpoints also emits valueChanged while the animation is stopped.
+        if self.heading_panel_is_animating():
+            self.resize_heading_panel(width)
+
+    def finish_heading_panel_transition(self):
+        self.heading_panel.setVisible(self._heading_panel_target_visible)
+        self.content_splitter.handle(1).setEnabled(self.heading_panel_state == "full")
+        if self.heading_panel.isVisible():
+            self.fit_heading_panel()
+
+    def schedule_heading_panel_hide(self):
+        if self._heading_panel_target_visible and not self.heading_panel_hide_timer.isActive():
+            self.heading_panel_hide_timer.start()
+
+    def at_heading_panel_edge(self, point):
+        return self.rect().contains(point) and point.x() >= self.width() - 6
+
+    def heading_panel_contains(self, point):
+        splitter_point = self.content_splitter.mapFrom(self, point)
+        return (self.at_heading_panel_edge(point)
+                or self.content_splitter.handle(1).geometry().contains(splitter_point)
+                or self.heading_panel.geometry().contains(splitter_point))
+
+    def hide_heading_panel_after_delay(self):
+        # The panel can slide under a stationary pointer during its reveal.
+        if self.underMouse() and self.heading_panel_contains(self.mapFromGlobal(QCursor.pos())):
+            return
+        self.update_heading_panel_visibility(animate=True)
+
+    def update_heading_panel_hover(self, point):
+        if not self._heading_panel_target_visible:
+            if self.at_heading_panel_edge(point) and not QApplication.activePopupWidget():
+                self.update_heading_panel_visibility(reveal=True, animate=True)
+        elif self.heading_panel_contains(point):
+            self.heading_panel_hide_timer.stop()
+        else:
+            self.schedule_heading_panel_hide()
 
     def remember_heading_panel_width(self, _position, _index):
         if self.heading_panel_state == "full" and self.heading_panel.isVisible() and not self._resizing_heading_panel:
@@ -2030,13 +2143,27 @@ class MainWindow(QMainWindow):
                 (self.heading_list.item(i) for i in range(self.heading_list.count())), self.headings):
             item.setText("  " * (level - 1) + (title or " ") if expanded else title[:3] or " ")
         if self.heading_panel.isVisible():
-            width = self.heading_panel_expanded_width if expanded else self.heading_panel_compact_width()
-            self.resize_heading_panel(width)
+            self.fit_heading_panel()
+
+    def heading_panel_target_width(self):
+        width = (self.heading_panel_expanded_width if self.heading_panel_state == "full"
+                 else self.heading_panel_compact_width())
+        return min(width, self.heading_panel_max_width())
+
+    def heading_panel_max_width(self):
+        available = self.content_splitter.width() - self.content_splitter.handleWidth()
+        return max(1, available - self.editor.minimumWidth())
+
+    def fit_heading_panel(self):
+        if not self.heading_panel_is_animating():
+            self.resize_heading_panel(self.heading_panel_target_width())
 
     def resize_heading_panel(self, width):
         self._resizing_heading_panel = True
         try:
-            self.content_splitter.setSizes([max(280, self.content_splitter.width() - int(width) - 6), int(width)])
+            available = self.content_splitter.width() - self.content_splitter.handleWidth()
+            width = min(width, self.heading_panel_max_width())
+            self.content_splitter.setSizes([available - width, width])
         finally:
             self._resizing_heading_panel = False
 
@@ -2164,11 +2291,13 @@ class MainWindow(QMainWindow):
                 self.heading_list.insertItem(index, item)
         self.heading_list.verticalScrollBar().setValue(0 if reset else scroll)
         self.heading_button.setVisible(available)
-        self.heading_panel.setVisible(available and self.heading_panel_state != "closed")
+        if reset or available != was_available:
+            self.update_heading_panel_visibility()
         if available and (reset or not was_available):
             self.update_heading_panel_display()
-        elif labels_changed and self.heading_panel.isVisible() and self.heading_panel_state == "narrow":
-            width = self.heading_panel_compact_width()
+        elif (labels_changed and self.heading_panel.isVisible() and self.heading_panel_state == "narrow"
+              and not self.heading_panel_is_animating()):
+            width = self.heading_panel_target_width()
             if self.content_splitter.sizes()[1] != width:
                 self.resize_heading_panel(width)
         self.menuBar().position_title()
@@ -2362,7 +2491,34 @@ class MainWindow(QMainWindow):
             self.update_maximize_button()
         super().changeEvent(event)
 
+    def handle_heading_panel_event(self, watched, event):
+        event_type = event.type()
+        if watched is self.heading_button:
+            if event_type == QEvent.Type.Enter and self.isActiveWindow():
+                self.show_heading_controls()
+            elif event_type == QEvent.Type.Hide:
+                self.heading_controls_menu.close()
+        if self.heading_controls_menu.isVisible() and not self.heading_controls_hide_timer.isActive():
+            # Qt sends moves outside a popup back to the menu while it has the mouse grab.
+            if ((watched in (self.heading_button, self.heading_controls_menu)
+                 and event_type == QEvent.Type.Leave)
+                    or (watched is self.heading_controls_menu and event_type == QEvent.Type.MouseMove
+                        and not self.heading_controls_menu.rect().contains(event.position().toPoint()))):
+                self.heading_controls_hide_timer.start()
+        if watched is self:
+            if event_type == QEvent.Type.Hide:
+                self.update_heading_panel_visibility()
+            elif not self.heading_panel_auto_hide:
+                return
+            elif event_type in (QEvent.Type.Leave, QEvent.Type.WindowDeactivate):
+                self.schedule_heading_panel_hide()
+            elif (event_type == QEvent.Type.HoverMove and not QApplication.mouseButtons()
+                  and self.heading_panel_state != "closed" and len(self.headings) > 1):
+                self.update_heading_panel_hover(event.position().toPoint())
+
     def eventFilter(self, watched, event):  # noqa: N802
+        if hasattr(self, "heading_button"):
+            self.handle_heading_panel_event(watched, event)
         popup = getattr(self, "document_path_popup", None)
         if popup is not None:
             if watched is self and event.type() in (

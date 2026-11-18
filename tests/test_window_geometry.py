@@ -133,7 +133,8 @@ class WindowGeometryTests(unittest.TestCase):
         self.app.processEvents()
 
     def test_close_button_works_with_each_menu_open(self):
-        for name in ('file_menu', 'settings_menu', 'recent_menu', 'heading_panel_menu'):
+        for name in ('file_menu', 'settings_menu', 'recent_menu', 'heading_panel_menu',
+                     'heading_controls_menu'):
             with self.subTest(menu=name):
                 window = self.open_window()
                 menu = getattr(window, name)
@@ -179,7 +180,8 @@ class WindowGeometryTests(unittest.TestCase):
         self.assertNotEqual(normal, hovered)
         self.assertEqual(hovered.pixelColor(4, 4), QColor(window.theme['error']))
 
-        for name in ('file_menu', 'settings_menu', 'recent_menu', 'heading_panel_menu'):
+        for name in ('file_menu', 'settings_menu', 'recent_menu', 'heading_panel_menu',
+                     'heading_controls_menu'):
             with self.subTest(menu=name):
                 menu = getattr(window, name)
                 menu.popup(window.menuBar().mapToGlobal(

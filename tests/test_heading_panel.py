@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QElapsedTimer, QPoint, QSettings, Qt
 from PySide6.QtGui import QTextCursor
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from main import MainWindow
@@ -42,6 +42,10 @@ class HeadingPanelTests(unittest.TestCase):
         self.window.deleteLater()
         self.app.processEvents()
 
+    def finish_panel_animation(self):
+        animation = self.window.heading_panel_animation
+        animation.setCurrentTime(animation.duration())
+
     def test_threshold_toggle_and_undo(self):
         w = self.window
         self.assertFalse(w.heading_button.isVisible())
@@ -53,15 +57,16 @@ class HeadingPanelTests(unittest.TestCase):
         self.assertTrue(w.heading_button.isVisible())
         self.app.processEvents()
         self.assertLess(w.heading_button.x(), w.minimize_button.x())
-        QTest.mouseClick(w.heading_button, Qt.MouseButton.LeftButton)
+        w.heading_state_actions['full'].trigger()
         self.assertEqual(w.heading_panel_state, 'full')
         self.editor.insertPlainText(' changed')
         self.assertTrue(w.heading_panel.isVisible())
         self.assertTrue(w.heading_button.isVisible())
-        QTest.mouseClick(w.heading_button, Qt.MouseButton.LeftButton)
+        w.heading_state_actions['closed'].trigger()
+        self.finish_panel_animation()
         self.assertEqual(w.heading_panel_state, 'closed')
         self.assertFalse(w.heading_panel.isVisible())
-        QTest.mouseClick(w.heading_button, Qt.MouseButton.LeftButton)
+        w.heading_state_actions['narrow'].trigger()
         self.assertEqual(w.heading_panel_state, 'narrow')
         self.assertTrue(w.heading_panel.isVisible())
         self.editor.selectAll()
@@ -147,7 +152,6 @@ class HeadingPanelTests(unittest.TestCase):
             self.assertEqual(w.heading_list.count(), 2)
             self.assertTrue(w.heading_panel.isVisible())
             w.heading_state_actions['closed'].trigger()
-            self.assertFalse(w.heading_panel.isVisible())
             w.open_file(md)
             self.assertFalse(w.heading_panel.isVisible())
             w.open_file(txt)
@@ -170,6 +174,8 @@ class HeadingPanelTests(unittest.TestCase):
         self.assertEqual(QSettings('Pad', 'Pad').value('heading_panel_width', type=int), saved_width)
 
         self.window.heading_state_actions['closed'].trigger()
+        self.window.heading_auto_hide_action.trigger()
+        self.finish_panel_animation()
         self.assertFalse(self.window.heading_panel.isVisible())
         self.editor.document().setModified(False)
         self.window._saved_text = self.editor.toPlainText()
@@ -183,8 +189,12 @@ class HeadingPanelTests(unittest.TestCase):
         self.editor.setPlainText('# First\n## Second')
         self.app.processEvents()
         self.assertEqual(self.window.heading_panel_state, 'closed')
+        self.assertTrue(self.window.heading_auto_hide_action.isChecked())
         self.assertFalse(self.window.heading_panel.isVisible())
         self.window.heading_state_actions['full'].trigger()
+        self.assertFalse(self.window.heading_panel.isVisible())
+        QTest.mouseMove(self.window, QPoint(self.window.width() - 1, self.window.height() // 2))
+        self.finish_panel_animation()
         self.app.processEvents()
         self.assertEqual(self.window.content_splitter.sizes()[1], saved_width)
 
@@ -207,7 +217,19 @@ class HeadingPanelTests(unittest.TestCase):
                              self.window.heading_panel_compact_width())
             self.assertEqual(settings.value('heading_panel_width', type=int), 400)
 
-    def test_button_cycles_states_without_hover_expansion(self):
+    def choose_heading_option(self, action):
+        w = self.window
+        QTest.mouseMove(self.editor.viewport(), self.editor.viewport().rect().center())
+        QTest.mouseMove(w.heading_button, w.heading_button.rect().center())
+        self.app.processEvents()
+        menu = w.heading_controls_menu
+        self.assertTrue(menu.isVisible())
+        QTest.mouseMove(menu, menu.actionGeometry(action).center())
+        QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(action).center())
+        self.app.processEvents()
+        self.assertFalse(menu.isVisible())
+
+    def test_hover_menu_selects_each_panel_state(self):
         w = self.window
         self.editor.setPlainText('# Longer first heading\n### Another heading')
         self.app.processEvents()
@@ -221,8 +243,11 @@ class HeadingPanelTests(unittest.TestCase):
         self.assertEqual([w.heading_list.item(i).text() for i in range(2)], ['Lon', 'Ano'])
         self.assertEqual(w.content_splitter.sizes()[1], compact_width)
 
-        w.heading_button.click()
-        self.app.processEvents()
+        self.assertEqual(
+            [action.text() for action in w.heading_controls_menu.actions() if not action.isSeparator()],
+            ['Auto Hide', 'Hide', 'Narrow', 'Full'],
+        )
+        self.choose_heading_option(w.heading_state_actions['full'])
         self.assertEqual([w.heading_list.item(i).text() for i in range(2)],
                          ['Longer first heading', '    Another heading'])
         expanded_width = w.content_splitter.sizes()[1]
@@ -236,13 +261,100 @@ class HeadingPanelTests(unittest.TestCase):
         QTest.mouseMove(self.editor.viewport(), self.editor.viewport().rect().center())
         QTest.qWait(120)
         self.assertEqual(w.content_splitter.sizes()[1], expanded_width)
-        w.heading_button.click()
+        self.choose_heading_option(w.heading_state_actions['closed'])
+        animation = w.heading_panel_animation
+        self.assertEqual(animation.duration(), 750)
+        self.assertTrue(w.heading_panel.isVisible())
+        animation.setCurrentTime(animation.duration() // 2)
+        self.assertLess(w.content_splitter.sizes()[1], expanded_width)
+        self.assertGreater(w.content_splitter.sizes()[1], 1)
+        self.finish_panel_animation()
         self.assertEqual(w.heading_panel_state, 'closed')
         self.assertFalse(w.heading_panel.isVisible())
-        w.heading_button.click()
+        self.choose_heading_option(w.heading_state_actions['narrow'])
+        animation.setCurrentTime(animation.duration() // 2)
+        self.assertGreater(w.content_splitter.sizes()[1], 1)
+        self.assertLess(w.content_splitter.sizes()[1], compact_width)
+        self.finish_panel_animation()
         self.assertEqual([w.heading_list.item(i).text() for i in range(2)], ['Lon', 'Ano'])
         self.assertEqual(w.content_splitter.sizes()[1], compact_width)
         self.assertTrue(w.heading_state_actions['narrow'].isChecked())
+
+    def test_hover_menu_dismisses_when_pointer_leaves(self):
+        w = self.window
+        self.editor.setPlainText('# First\n## Second')
+        self.app.processEvents()
+        QTest.mouseMove(self.editor.viewport(), self.editor.viewport().rect().center())
+        QTest.mouseMove(w.heading_button, w.heading_button.rect().center())
+        menu = w.heading_controls_menu
+        self.assertTrue(menu.isVisible())
+
+        QTest.mouseMove(menu, menu.actionGeometry(w.heading_auto_hide_action).center())
+        QTest.qWait(200)
+        self.assertTrue(menu.isVisible())
+
+        QTest.mouseMove(menu, menu.mapFromGlobal(
+            self.editor.viewport().mapToGlobal(self.editor.viewport().rect().center())))
+        QTest.qWait(200)
+        self.assertFalse(menu.isVisible())
+        self.assertEqual(w.heading_panel_state, 'narrow')
+
+    def test_auto_hide_reveals_selected_width_at_window_edge(self):
+        w = self.window
+        self.editor.setPlainText('# First\n## Second')
+        w.heading_state_actions['full'].trigger()
+        self.app.processEvents()
+        splitter = w.content_splitter
+        splitter.moveSplitter(splitter.width() - 326, 1)
+        width = splitter.sizes()[1]
+        self.choose_heading_option(w.heading_auto_hide_action)
+        self.finish_panel_animation()
+        self.assertTrue(w.heading_auto_hide_action.isChecked())
+        self.assertTrue(w.heading_panel_menu.actions()[0].isChecked())
+        self.assertTrue(QSettings('Pad', 'Pad').value('heading_panel_auto_hide', type=bool))
+        self.assertFalse(w.heading_panel.isVisible())
+
+        edge = QPoint(w.width() - 1, w.height() // 2)
+        QTest.mouseMove(w, edge)
+        self.finish_panel_animation()
+        self.app.processEvents()
+        self.assertTrue(w.heading_panel.isVisible())
+        self.assertEqual(splitter.sizes()[1], width)
+        QTest.mouseMove(w.heading_list.viewport(), w.heading_list.viewport().rect().center())
+        self.assertTrue(w.heading_panel.isVisible())
+        timer = w.heading_panel_hide_timer
+        self.assertEqual(timer.interval(), 5000)
+        QTest.mouseMove(self.editor.viewport(), self.editor.viewport().rect().center())
+        self.assertTrue(timer.isActive())
+        self.assertEqual(splitter.sizes()[1], width)
+        QTest.mouseMove(w.heading_list.viewport(), w.heading_list.viewport().rect().center())
+        self.assertFalse(timer.isActive())
+        self.assertTrue(w.heading_panel.isVisible())
+
+        self.choose_heading_option(w.heading_state_actions['closed'])
+        self.finish_panel_animation()
+        QTest.mouseMove(w, edge)
+        self.assertFalse(w.heading_panel.isVisible())
+        self.choose_heading_option(w.heading_state_actions['narrow'])
+        self.assertFalse(w.heading_panel.isVisible())
+        QTest.mouseMove(w, edge)
+        self.finish_panel_animation()
+        self.assertEqual(splitter.sizes()[1], w.heading_panel_compact_width())
+        elapsed = QElapsedTimer()
+        elapsed.start()
+        QTest.mouseMove(w, edge + QPoint(10, 0))
+        self.assertTrue(timer.isActive())
+        self.assertTrue(w.heading_panel.isVisible())
+        finished = QSignalSpy(w.heading_panel_animation.finished)
+        self.assertTrue(finished.wait(7000))
+        self.assertGreaterEqual(elapsed.elapsed(), 5700)
+        self.assertFalse(w.heading_panel.isVisible())
+
+        self.choose_heading_option(w.heading_auto_hide_action)
+        self.finish_panel_animation()
+        self.assertFalse(w.heading_auto_hide_action.isChecked())
+        QTest.mouseMove(self.editor.viewport(), self.editor.viewport().rect().center())
+        self.assertTrue(w.heading_panel.isVisible())
 
     def test_clicking_opened_file_does_not_request_save(self):
         source = '# First\nBody text\n## Second\nMore body\n'
