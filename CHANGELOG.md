@@ -1,3 +1,10 @@
+# MDPad v1.0.7
+
+- Hover over the heading panel icon to choose Hide, Narrow, Full, or Auto Hide. The panel slides open or closed in about 0.75 seconds. Auto Hide reveals it at the right window edge and waits five seconds after the pointer leaves before closing.
+- Hover over the document title to copy its path or open its containing folder.
+- Remove extra spaces and newlines with one cleanup action.
+- Scroll past the end of notes and preserve paragraph spacing when replacing documents.
+
 # MDPad v1.0.6
 
 - Remember the window's exact size, position, and maximized state, including placement against screen edges. Use XWayland when available to restore positions on Wayland desktops.
