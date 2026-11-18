@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QUrl
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
 from main import MainWindow
@@ -38,9 +38,11 @@ class TitlePathTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_hover_and_actions_preserve_editor_focus(self):
+        self.assertTrue(QTest.qWaitForWindowActive(self.window))
         self.window.editor.setFocus()
+        hover_timeout = QSignalSpy(self.popup.show_timer.timeout)
         self.app.sendEvent(self.window.title_label, QEvent(QEvent.Type.Enter))
-        QTest.qWait(400)
+        self.assertTrue(hover_timeout.wait(2000), 'Document path hover timer did not fire')
         self.assertTrue(self.popup.isVisible())
         self.assertEqual(self.popup.path_label.text(), str(self.path))
         self.assertIs(self.app.focusWidget(), self.window.editor)
@@ -87,10 +89,11 @@ class TitlePathTests(unittest.TestCase):
     def test_leaving_card_dismisses_after_grace_period(self):
         self.popup.show_for_title()
         outside = self.window.editor.mapToGlobal(QPoint(50, 200))
+        hide_timeout = QSignalSpy(self.popup.hide_timer.timeout)
         with patch('main.QCursor.pos', return_value=outside):
             self.app.sendEvent(self.popup, QEvent(QEvent.Type.Leave))
             self.assertTrue(self.popup.isVisible())
-            QTest.qWait(300)
+            self.assertTrue(hide_timeout.wait(2000), 'Document path hide timer did not fire')
         self.assertFalse(self.popup.isVisible())
 
 
