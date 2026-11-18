@@ -104,6 +104,46 @@ class FileSwitchingTests(unittest.TestCase):
         self.assertEqual(self.window.current_file, self.first)
         self.assertEqual(self.window.editor.toPlainText(), self.original)
 
+    def test_reload_action_reads_external_changes(self):
+        self.first.write_bytes(b'\xef\xbb\xbf# Updated\r\nFrom disk\r\n')
+        action = next(action for action in self.window.file_menu.actions()
+                      if action.text() == 'Reload Document')
+        self.assertTrue(action.isEnabled())
+        with patch.object(QMessageBox, 'exec') as prompt:
+            action.trigger()
+        prompt.assert_not_called()
+        self.assertEqual(self.window.current_file, self.first)
+        self.assertEqual(self.window.editor.toPlainText(), '# Updated\nFrom disk\n')
+        self.assertTrue(self.window.has_bom)
+        self.assertEqual(self.window.newline, '\r\n')
+        self.assertFalse(self.window.has_unsaved_changes())
+        self.assertFalse(self.window.editor.document().isUndoAvailable())
+
+    def test_reload_cancel_preserves_edits_and_discard_loads_disk(self):
+        changed = self.edit_first()
+        self.first.write_text('External changes')
+        with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Cancel):
+            self.assertFalse(self.window.reload_document())
+        self.assertEqual(self.window.editor.toPlainText(), changed)
+        with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Discard):
+            self.assertTrue(self.window.reload_document())
+        self.assertEqual(self.window.editor.toPlainText(), 'External changes')
+        self.assertEqual(self.first.read_text(), 'External changes')
+
+    def test_reload_missing_file_preserves_document(self):
+        self.first.unlink()
+        with patch.object(QMessageBox, 'critical') as error:
+            self.assertFalse(self.window.reload_document())
+        error.assert_called_once()
+        self.assertEqual(self.window.editor.toPlainText(), self.original)
+
+    def test_reload_disabled_for_untitled_documents(self):
+        self.window.new_file()
+        self.assertFalse(self.window.reload_action.isEnabled())
+        self.assertFalse(self.window.reload_document())
+        self.window.open_file(self.first)
+        self.assertTrue(self.window.reload_action.isEnabled())
+
     def test_switch_releases_active_markdown_and_pending_work(self):
         editor = self.window.editor
         for _ in range(3):

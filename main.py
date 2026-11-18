@@ -1888,15 +1888,20 @@ class MainWindow(QMainWindow):
         actions = [
             ("New", QKeySequence.StandardKey.New, self.new_file),
             ("Open…", QKeySequence.StandardKey.Open, self.choose_file),
+            ("Reload Document", None, self.reload_document),
             ("Save", QKeySequence.StandardKey.Save, self.save_file),
             ("Save as…", QKeySequence.StandardKey.SaveAs, self.save_as),
         ]
         for label, shortcut, callback in actions:
             action = QAction(label, self)
-            action.setShortcut(shortcut)
+            if shortcut is not None:
+                action.setShortcut(shortcut)
             action.triggered.connect(callback)
             menu.addAction(action)
             self.addAction(action)
+            if label == "Reload Document":
+                self.reload_action = action
+                action.setEnabled(self.current_file is not None)
             if shortcut == QKeySequence.StandardKey.Open:
                 self.recent_menu = QMenu("Open Recent", menu)
                 menu.addMenu(self.recent_menu)
@@ -2619,6 +2624,11 @@ class MainWindow(QMainWindow):
         if selected:
             self.open_file(Path(selected))
 
+    def reload_document(self) -> bool:
+        if self.current_file is None:
+            return False
+        return self.open_file(self.current_file)
+
     def open_file(self, path: Path):
         if not self.confirm_discard():
             return False
@@ -2887,6 +2897,7 @@ class MainWindow(QMainWindow):
         return self.editor.toPlainText() != self._saved_text
 
     def update_title(self):
+        self.reload_action.setEnabled(self.current_file is not None)
         name = self.current_file.name if self.current_file else "Untitled"
         dirty = self.has_unsaved_changes()
         title = name + ("*" if dirty else "")
