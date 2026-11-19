@@ -1344,9 +1344,20 @@ class BoxIconButton(QToolButton):
         self.icon_name = icon_name
 
     def paintEvent(self, event):  # noqa: N802
-        super().paintEvent(event)
-        painter = QPainter(self)
         theme = self.window().theme
+        window_control = self.objectName() in ("windowControl", "closeControl")
+        if not window_control:
+            super().paintEvent(event)
+        painter = QPainter(self)
+        if window_control:
+            # Paint the frameless controls ourselves so native toolbutton
+            # decoration cannot cover the SVG at the window edge.
+            if self.underMouse() and self.isEnabled():
+                background = (theme['error'] if self.objectName() == "closeControl"
+                              else theme['hover'])
+                painter.fillRect(self.rect(), QColor(background))
+            elif self.isChecked() or self.isDown():
+                painter.fillRect(self.rect(), QColor(theme['selected']))
         color = (theme['disabled'] if not self.isEnabled() else
                  theme['window'] if self.objectName() == "closeControl" and self.underMouse() else
                  theme['text'])
